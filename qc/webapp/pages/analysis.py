@@ -482,6 +482,46 @@ def render_mapping() -> None:
             st.rerun()
 
     st.markdown("---")
+
+    # ── MHC-I Prediction Settings ─────────────────────────────────────────────
+    st.subheader("MHC Class I Prediction Settings")
+    st.markdown(
+        "Configure the IEDB binding prediction that will run in the "
+        "**MHC-I Prediction** tab of the report."
+    )
+    _ia, _il, _im = st.columns([3, 2, 2])
+    with _ia:
+        st.multiselect(
+            "HLA Alleles",
+            options=IEDB_ALLELES,
+            default=st.session_state.get("iedb_cfg_alleles", ["HLA-A*02:01"]),
+            key="iedb_cfg_alleles",
+        )
+        st.text_input(
+            "Custom allele (comma-separated)",
+            key="iedb_cfg_custom",
+            placeholder="HLA-A*68:01",
+        )
+    with _il:
+        st.multiselect(
+            "Peptide Lengths (mer)",
+            options=[8, 9, 10, 11],
+            default=st.session_state.get("iedb_cfg_lengths", [9]),
+            key="iedb_cfg_lengths",
+        )
+    with _im:
+        _method_idx = IEDB_METHODS.index(
+            st.session_state.get("iedb_cfg_method", "recommended")
+        ) if st.session_state.get("iedb_cfg_method", "recommended") in IEDB_METHODS else 0
+        st.selectbox(
+            "Prediction Method",
+            options=IEDB_METHODS,
+            index=_method_idx,
+            key="iedb_cfg_method",
+            help="'recommended' selects the best available method per allele.",
+        )
+
+    st.markdown("---")
     run_label = st.text_input(
         "Run label (used in report title)",
         value=datetime.now().strftime("Run %Y-%m-%d"),
@@ -533,8 +573,9 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
     import time
 
     st.markdown(
-        "Run MHC Class I binding prediction on peptides from this dataset using the "
-        "[IEDB Tools REST API](https://tools.iedb.org/main/tools-api/)."
+        "MHC Class I binding prediction via the "
+        "[IEDB Tools REST API](https://tools.iedb.org/main/tools-api/), "
+        "applied to the peptides in this dataset."
     )
     st.info(
         "**IEDB usage guidelines** — jobs are submitted one at a time; "
@@ -543,57 +584,44 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
         "large requests are split into per-allele / per-length batches."
     )
 
-    # ── Configuration controls ────────────────────────────────────────────────
-    c_a, c_l, c_m = st.columns([3, 2, 2])
-    with c_a:
-        sel_alleles: list[str] = st.multiselect(
-            "HLA Alleles",
-            options=IEDB_ALLELES,
-            default=["HLA-A*02:01"],
-            key="iedb_tab_alleles",
-        )
-        custom_allele = st.text_input(
-            "Custom allele",
-            key="iedb_tab_custom_allele",
-            placeholder="HLA-A*68:01",
-        )
-        if custom_allele.strip():
-            seen: set[str] = set(sel_alleles)
-            for a in custom_allele.strip().split(","):
-                a = a.strip()
-                if a and a not in seen:
-                    sel_alleles.append(a)
-                    seen.add(a)
+    # ── Read config written in Step 2 ─────────────────────────────────────────
+    sel_alleles: list[str] = list(st.session_state.get("iedb_cfg_alleles", ["HLA-A*02:01"]))
+    custom_raw: str = st.session_state.get("iedb_cfg_custom", "").strip()
+    if custom_raw:
+        seen: set[str] = set(sel_alleles)
+        for a in custom_raw.split(","):
+            a = a.strip()
+            if a and a not in seen:
+                sel_alleles.append(a)
+                seen.add(a)
+    sel_lengths: list[int] = list(st.session_state.get("iedb_cfg_lengths", [9]))
+    sel_method: str = st.session_state.get("iedb_cfg_method", "recommended")
 
-    with c_l:
-        sel_lengths: list[int] = st.multiselect(
-            "Peptide Lengths (mer)",
-            options=[8, 9, 10, 11],
-            default=[9],
-            key="iedb_tab_lengths",
-        )
+    # ── Settings summary ──────────────────────────────────────────────────────
+    st.markdown("**Settings from Step 2:**")
+    _s1, _s2, _s3 = st.columns(3)
+    _s1.markdown(
+        f"**Alleles:** {', '.join(f'`{a}`' for a in sel_alleles) if sel_alleles else '—'}"
+    )
+    _s2.markdown(
+        f"**Lengths:** {', '.join(f'`{l}`' for l in sel_lengths) if sel_lengths else '—'}"
+    )
+    _s3.markdown(f"**Method:** `{sel_method}`")
 
-    with c_m:
-        sel_method: str = st.selectbox(
-            "Prediction Method",
-            options=IEDB_METHODS,
-            index=0,
-            key="iedb_tab_method",
-            help=(
-                "'recommended' selects the best available method per allele. "
-                "Other options: NetMHCpan EL/BA, ANN, SMM, SMMPMBEC."
-            ),
+    if not sel_alleles or not sel_lengths:
+        st.warning(
+            "HLA Alleles and Peptide Lengths must be configured in "
+            "**Step 2 · Configure** before running predictions."
         )
+        return
 
     # ── Derive peptides from the loaded dataset ───────────────────────────────
     unique_peptides: list[str] = (
         df["_peptide"].dropna().unique().tolist() if "_peptide" in df.columns else []
     )
-    matching_peptides: list[str] = (
-        [p for p in unique_peptides if len(p) in set(sel_lengths)]
-        if sel_lengths
-        else []
-    )
+    matching_peptides: list[str] = [
+        p for p in unique_peptides if len(p) in set(sel_lengths)
+    ]
 
     st.caption(
         f"{len(unique_peptides):,} unique peptides in dataset · "
@@ -602,58 +630,76 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
 
     if len(matching_peptides) > 2_000:
         st.warning(
-            f"{len(matching_peptides):,} peptides will be submitted — this may take "
-            "several minutes. The IEDB API processes them in batches."
+            f"{len(matching_peptides):,} peptides will be submitted — "
+            "this may take several minutes."
         )
 
     # ── Run button ────────────────────────────────────────────────────────────
     if st.button("Run IEDB Prediction", type="primary", key="iedb_tab_run"):
-        if not sel_alleles:
-            st.error("Select at least one HLA allele.")
-        elif not sel_lengths:
-            st.error("Select at least one peptide length.")
-        elif not matching_peptides:
+        if not matching_peptides:
             st.error(
                 "No peptides in the dataset match the selected lengths. "
-                "Check the length selection or the Peptide Length column mapping."
+                "Adjust the Peptide Lengths in Step 2."
             )
         else:
             n_comb = len(matching_peptides) * len(sel_alleles) * len(sel_lengths)
             use_email = n_comb > IEDB_THRESHOLD
 
-            if use_email:
-                st.info(
-                    f"{n_comb:,} combinations (threshold: {IEDB_THRESHOLD:,}) — "
-                    f"email `{IEDB_EMAIL}` included in each request."
-                )
-
             batches = [(a, l) for a in sel_alleles for l in sel_lengths]
             total = len(batches)
-            progress = st.progress(0.0, text="Starting…")
             frames: list[pd.DataFrame] = []
             errs: list[str] = []
 
-            for idx, (allele, length) in enumerate(batches):
-                # Filter to only peptides of this exact length for this batch
-                batch_seqs = [p for p in matching_peptides if len(p) == length]
-                if not batch_seqs:
-                    continue
-                progress.progress(
-                    idx / total,
-                    text=f"Predicting {allele} {length}-mer ({idx + 1}/{total})…",
-                )
-                try:
-                    frames.append(
-                        call_iedb_mhci(batch_seqs, allele, length, sel_method, use_email)
+            with st.status(
+                f"Running {total} batch(es) — {len(matching_peptides):,} peptides × "
+                f"{len(sel_alleles)} allele(s) × {len(sel_lengths)} length(s)…",
+                expanded=True,
+            ) as status:
+                if use_email:
+                    st.write(
+                        f":envelope: Large job ({n_comb:,} combinations) — "
+                        f"`{IEDB_EMAIL}` included in requests."
                     )
-                except Exception as exc:
-                    errs.append(f"{allele} / {length}-mer: {exc}")
-                if idx < total - 1:
-                    time.sleep(0.5)
+                progress = st.progress(0.0)
 
-            progress.progress(1.0, text="Complete.")
-            for err in errs:
-                st.warning(err)
+                for idx, (allele, length) in enumerate(batches):
+                    batch_seqs = [p for p in matching_peptides if len(p) == length]
+                    if not batch_seqs:
+                        continue
+
+                    progress.progress(
+                        idx / total,
+                        text=f"{allele}  {length}-mer  ({idx + 1}/{total})",
+                    )
+                    try:
+                        result = call_iedb_mhci(
+                            batch_seqs, allele, length, sel_method, use_email
+                        )
+                        frames.append(result)
+                        st.write(
+                            f":white_check_mark: {allele} {length}-mer — "
+                            f"{len(result):,} predictions"
+                        )
+                    except Exception as exc:
+                        errs.append(f"{allele} / {length}-mer: {exc}")
+                        st.write(f":x: {allele} {length}-mer — {exc}")
+
+                    if idx < total - 1:
+                        time.sleep(0.5)
+
+                progress.progress(1.0, text="Done.")
+                if errs:
+                    status.update(
+                        label=f"Completed with {len(errs)} error(s)",
+                        state="error",
+                        expanded=True,
+                    )
+                else:
+                    status.update(
+                        label=f"Done — {len(frames)} batch(es) complete",
+                        state="complete",
+                        expanded=False,
+                    )
 
             if frames:
                 st.session_state["iedb_tab_results"] = pd.concat(frames, ignore_index=True)

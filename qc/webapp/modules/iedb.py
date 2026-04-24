@@ -3,16 +3,39 @@ from __future__ import annotations
 
 import time
 from io import StringIO
-from typing import Generator
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 IEDB_MHCI_URL = "https://tools.iedb.org/tools_api/mhci/"
 IEDB_EMAIL = "unechoed@gmail.com"
 
 # Combinations above this threshold include an email address (rough 10-min proxy)
 LONG_JOB_THRESHOLD = 500
+
+# TCP connect timeout (seconds) — fail fast if the host is unreachable
+_CONNECT_TIMEOUT = 15
+# Read timeout (seconds) — large jobs can take several minutes to compute
+_READ_TIMEOUT = 600
+
+# Retry on transient network errors: 3 attempts with exponential backoff (2 s, 4 s, 8 s)
+_RETRY = Retry(
+    total=3,
+    backoff_factor=2,
+    status_forcelist=[500, 502, 503, 504],
+    allowed_methods=["POST"],
+    raise_on_status=False,
+)
+
+
+def _session() -> requests.Session:
+    s = requests.Session()
+    adapter = HTTPAdapter(max_retries=_RETRY)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
 
 COMMON_ALLELES = [
     "HLA-A*01:01", "HLA-A*02:01", "HLA-A*03:01", "HLA-A*11:01",
@@ -39,7 +62,12 @@ def call_iedb_mhci(
     method: str,
     include_email: bool,
 ) -> pd.DataFrame:
-    """POST one prediction job to the IEDB MHC-I API and return a parsed DataFrame."""
+    """POST one prediction job to the IEDB MHC-I API and return a parsed DataFrame.
+
+    Uses a short connect timeout (15 s) so a dead host fails fast, and a long
+    read timeout (600 s) for large payloads.  Three automatic retries with
+    exponential backoff cover transient 5xx / network blips.
+    """
     fasta = "\n".join(f">seq{i + 1}\n{seq}" for i, seq in enumerate(sequences))
     data: dict[str, str] = {
         "method": method,
@@ -50,7 +78,25 @@ def call_iedb_mhci(
     if include_email:
         data["email_address"] = IEDB_EMAIL
 
-    resp = requests.post(IEDB_MHCI_URL, data=data, timeout=600)
+    try:
+        resp = _session().post(
+            IEDB_MHCI_URL,
+            data=data,
+            timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+        )
+    except requests.exceptions.ConnectTimeout:
+        raise RuntimeError(
+            f"Could not reach {IEDB_MHCI_URL} within {_CONNECT_TIMEOUT} s. "
+            "Check your internet connection or try again later."
+        )
+    except requests.exceptions.ReadTimeout:
+        raise RuntimeError(
+            f"IEDB API did not respond within {_READ_TIMEOUT} s. "
+            "The server may be overloaded — try a smaller batch or retry later."
+        )
+    except requests.exceptions.ConnectionError as exc:
+        raise RuntimeError(f"Network error contacting IEDB: {exc}") from exc
+
     resp.raise_for_status()
 
     text = resp.text.strip()
