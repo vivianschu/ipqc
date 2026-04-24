@@ -482,53 +482,6 @@ def render_mapping() -> None:
             st.rerun()
 
     st.markdown("---")
-
-    # ── MHC-I Prediction Settings ─────────────────────────────────────────────
-    st.subheader("MHC Class I Prediction Settings")
-    st.markdown(
-        "Configure the IEDB binding prediction that will run in the "
-        "**MHC-I Prediction** tab of the report."
-    )
-
-    # Initialise session-state defaults exactly once so widget `key=` alone
-    # controls the value — mixing `key=` with `default=` can cause Streamlit to
-    # silently reset the widget during reruns triggered by other widgets.
-    for _cfg_key, _cfg_default in [
-        ("iedb_cfg_alleles", ["HLA-A*02:01"]),
-        ("iedb_cfg_lengths", [9]),
-        ("iedb_cfg_custom", ""),
-        ("iedb_cfg_method", "recommended"),
-    ]:
-        if _cfg_key not in st.session_state:
-            st.session_state[_cfg_key] = _cfg_default
-
-    _ia, _il, _im = st.columns([3, 2, 2])
-    with _ia:
-        st.multiselect(
-            "HLA Alleles",
-            options=IEDB_ALLELES,
-            key="iedb_cfg_alleles",
-        )
-        st.text_input(
-            "Custom allele (comma-separated)",
-            key="iedb_cfg_custom",
-            placeholder="HLA-A*68:01",
-        )
-    with _il:
-        st.multiselect(
-            "Peptide Lengths (mer)",
-            options=[8, 9, 10, 11],
-            key="iedb_cfg_lengths",
-        )
-    with _im:
-        st.selectbox(
-            "Prediction Method",
-            options=IEDB_METHODS,
-            key="iedb_cfg_method",
-            help="'recommended' selects the best available method per allele.",
-        )
-
-    st.markdown("---")
     run_label = st.text_input(
         "Run label (used in report title)",
         value=datetime.now().strftime("Run %Y-%m-%d"),
@@ -693,8 +646,43 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
         "requests are split into per-allele / per-length batches."
     )
 
-    # ── Read config written in Step 2 ─────────────────────────────────────────
-    sel_alleles: list[str] = list(st.session_state.get("iedb_cfg_alleles", ["HLA-A*02:01"]))
+    # ── Configuration widgets ─────────────────────────────────────────────────
+    for _cfg_key, _cfg_default in [
+        ("iedb_cfg_alleles", ["HLA-A*02:01"]),
+        ("iedb_cfg_lengths", [9]),
+        ("iedb_cfg_custom", ""),
+        ("iedb_cfg_method", "recommended"),
+    ]:
+        if _cfg_key not in st.session_state:
+            st.session_state[_cfg_key] = _cfg_default
+
+    _ia, _il, _im = st.columns([3, 2, 2])
+    with _ia:
+        st.multiselect(
+            "HLA Alleles",
+            options=IEDB_ALLELES,
+            key="iedb_cfg_alleles",
+        )
+        st.text_input(
+            "Custom allele (comma-separated)",
+            key="iedb_cfg_custom",
+            placeholder="HLA-A*68:01",
+        )
+    with _il:
+        st.multiselect(
+            "Peptide Lengths (mer)",
+            options=[8, 9, 10, 11],
+            key="iedb_cfg_lengths",
+        )
+    with _im:
+        st.selectbox(
+            "Prediction Method",
+            options=IEDB_METHODS,
+            key="iedb_cfg_method",
+            help="'recommended' selects the best available method per allele.",
+        )
+
+    sel_alleles: list[str] = list(st.session_state.get("iedb_cfg_alleles", []))
     custom_raw: str = st.session_state.get("iedb_cfg_custom", "").strip()
     if custom_raw:
         seen: set[str] = set(sel_alleles)
@@ -703,25 +691,11 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
             if a and a not in seen:
                 sel_alleles.append(a)
                 seen.add(a)
-    sel_lengths: list[int] = list(st.session_state.get("iedb_cfg_lengths", [9]))
+    sel_lengths: list[int] = list(st.session_state.get("iedb_cfg_lengths", []))
     sel_method: str = st.session_state.get("iedb_cfg_method", "recommended")
 
-    # ── Settings summary ──────────────────────────────────────────────────────
-    st.markdown("**Settings from Step 2:**")
-    _s1, _s2, _s3 = st.columns(3)
-    _s1.markdown(
-        f"**Alleles:** {', '.join(f'`{a}`' for a in sel_alleles) if sel_alleles else '—'}"
-    )
-    _s2.markdown(
-        f"**Lengths:** {', '.join(f'`{l}`' for l in sel_lengths) if sel_lengths else '—'}"
-    )
-    _s3.markdown(f"**Method:** `{sel_method}`")
-
     if not sel_alleles or not sel_lengths:
-        st.warning(
-            "HLA Alleles and Peptide Lengths must be configured in "
-            "**Step 2 · Configure** before running predictions."
-        )
+        st.warning("Select at least one HLA allele and one peptide length to run predictions.")
         return
 
     # ── Derive peptides from the loaded dataset ───────────────────────────────
@@ -754,7 +728,7 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
         if not matching_peptides:
             st.error(
                 "No peptides in the dataset match the selected lengths. "
-                "Adjust the Peptide Lengths in Step 2."
+                "Adjust the Peptide Lengths above."
             )
         else:
             batches = [(a, l) for a in sel_alleles for l in sel_lengths]
