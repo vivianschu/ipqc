@@ -1,0 +1,46 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Generated reports and state
+qc/qc_report.html
+qc/qc_state.json
+
+# IEDB cache files
+qc/.iedb_cache.json
+qc/.iedb_seqs.pkl
+
+# Large database dump (13 GB)
+qc/iedb/iedb_public.sql
+
+# Webapp runtime data
+qc/webapp/data/qc.db
+qc/webapp/data/runs/
+
+# Streamlit secrets
+qc/webapp/.streamlit/secrets.toml
+
+# Test/coverage artifacts
+.pytest_cache/
+.coverage
+htmlcov/
