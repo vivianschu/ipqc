@@ -9,6 +9,7 @@ Run:
 """
 from __future__ import annotations
 
+import base64
 from typing import Any
 
 import streamlit as st
@@ -51,18 +52,20 @@ inject_sidebar_css()
 
 check_prototype_gate()
 
-# ── Sidebar: application title (appears above navigation links) ───────────────
+# ── Sidebar logo/title — rendered above navigation links via st.logo() ────────
 
-with st.sidebar:
-    st.markdown(
-        """
-        <div style="padding: 0.5rem 0 0.75rem 0;">
-            <div style="font-size: 1.4rem; font-weight: 700; line-height: 1.2;">IPQC</div>
-            <div style="font-size: 0.85rem; color: #888; margin-top: 2px;">Immunopeptidomics QC</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+_LOGO_SVG = """\
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="52" viewBox="0 0 240 52">
+  <text x="2" y="32"
+    font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+    font-size="26" font-weight="700" fill="#0f172a">IPQC</text>
+  <text x="3" y="48"
+    font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif"
+    font-size="13" fill="#64748b">Immunopeptidomics QC</text>
+</svg>"""
+
+_LOGO_URL = "data:image/svg+xml;base64," + base64.b64encode(_LOGO_SVG.encode()).decode()
+st.logo(_LOGO_URL, size="large")
 
 # ── Navigation ────────────────────────────────────────────────────────────────
 
