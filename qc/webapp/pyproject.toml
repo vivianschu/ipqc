@@ -16,6 +16,17 @@ dependencies = [
     "pyarrow>=14.0",
 ]
 
+[project.optional-dependencies]
+# MHC-I prediction backends — install whichever tools you have access to.
+# After installing mhcflurry, run: mhcflurry-downloads fetch
+mhcflurry = ["mhcflurry>=2.0"]
+bigmhc    = ["bigmhc"]
+transhla  = ["TransHLA"]
+# NetMHCpan must be installed manually from DTU:
+#   https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/
+# UniPMT must be installed from GitHub:
+#   git clone https://github.com/IEDB-group/UniPMT && pip install -e UniPMT
+
 [project.scripts]
 qc-webapp = "app:main"
 

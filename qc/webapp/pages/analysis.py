@@ -74,14 +74,14 @@ from modules.metrics import (
     compute_sample_summary,
     parse_charges,
 )
-from modules.iedb import (
-    COMMON_ALLELES as IEDB_ALLELES,
-    IEDB_MHCI_URL,
-    LONG_JOB_THRESHOLD as IEDB_THRESHOLD,
-    METHODS as IEDB_METHODS,
-    call_iedb_mhci,
-    postprocess as iedb_postprocess,
+from modules.prediction import (
+    COMMON_ALLELES as PRED_ALLELES,
+    SUPPORTED_LENGTHS as PRED_LENGTHS,
+    postprocess as pred_postprocess,
+    predictor_status_table,
+    run_prediction,
 )
+from modules.predictors.registry import get_available_predictors
 from modules.parsing import detect_delimiter, load_table
 from modules.report import build_csv_summary, build_html_report
 from modules.storage import serialize_run
@@ -527,233 +527,76 @@ def render_mapping() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# IEDB MHC-I Prediction tab (embedded inside Screen 3)
+# MHC-I Prediction tab (embedded inside Screen 3)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _resolve_iedb_email(n_comb: int) -> str | None:
-    """Return a notification email for large IEDB jobs, or None for small ones.
-
-    Uses the logged-in user's email when available; otherwise shows a text input.
-    For small jobs (≤ LONG_JOB_THRESHOLD) always returns None.
-    """
-    if n_comb <= IEDB_THRESHOLD:
-        return None
-
-    user_email: str = ""
-    user_id = st.session_state.get("user_id")
-    if user_id:
-        rec = get_user_by_id(int(user_id))
-        user_email = (rec or {}).get("email") or ""
-
-    if user_email:
-        st.info(
-            f":envelope: Large job ({n_comb:,} combinations) — "
-            f"IEDB notification email: `{user_email}`"
-        )
-        return user_email
-
-    entered = st.text_input(
-        "Email for IEDB job notification",
-        key="iedb_tab_email",
-        placeholder="your@email.com",
-        help=(
-            f"This job has {n_comb:,} combinations (>{IEDB_THRESHOLD:,}). "
-            "IEDB requires an email address for large jobs."
-        ),
-    )
-    if entered:
-        st.info(
-            f":envelope: Large job ({n_comb:,} combinations) — "
-            f"notification will be sent to `{entered}`."
-        )
-    else:
-        st.warning(
-            f":envelope: Large job ({n_comb:,} combinations) — "
-            "enter an email above so IEDB can notify you on completion."
-        )
-    return entered or None
-
-
-def _run_iedb_batches(
-    batches: list[tuple[str, int]],
-    matching_peptides: list[str],
-    sel_method: str,
-    job_email: str | None,
-) -> tuple[list[pd.DataFrame], list[str], list[tuple[str, int]]]:
-    """Run a list of (allele, length) batches and return (frames, error_strings, failed_batches)."""
-    import time
-
-    total = len(batches)
-    frames: list[pd.DataFrame] = []
-    errs: list[str] = []
-    failed: list[tuple[str, int]] = []
-
-    with st.status(
-        f"Running {total} batch(es) — {len(matching_peptides):,} peptides × {total} combination(s)…",
-        expanded=True,
-    ) as status:
-        progress = st.progress(0.0)
-
-        for idx, (allele, length) in enumerate(batches):
-            batch_seqs = [p for p in matching_peptides if len(p) == length]
-            if not batch_seqs:
-                continue
-
-            progress.progress(
-                idx / total,
-                text=f"{allele}  {length}-mer  ({idx + 1}/{total})",
-            )
-            try:
-                result = call_iedb_mhci(batch_seqs, allele, length, sel_method, job_email)
-                frames.append(result)
-                st.write(
-                    f":white_check_mark: {allele} {length}-mer — "
-                    f"{len(result):,} predictions"
-                )
-            except Exception as exc:
-                errs.append(f"{allele} / {length}-mer: {exc}")
-                failed.append((allele, length))
-                st.write(f":x: {allele} {length}-mer — {exc}")
-
-            if idx < total - 1:
-                time.sleep(0.5)
-
-        progress.progress(1.0, text="Done.")
-        if errs:
-            status.update(
-                label=f"Completed with {len(errs)} error(s)",
-                state="error",
-                expanded=True,
-            )
-        else:
-            status.update(
-                label=f"Done — {len(frames)} batch(es) complete",
-                state="complete",
-                expanded=False,
-            )
-
-    return frames, errs, failed
-
-
-def _test_iedb_connection() -> None:
-    """Connectivity probe — tests both raw requests and the retry-session path."""
-    import os
-    import traceback
-
-    import requests as _req
-    from modules.iedb import _session as _iedb_session
-
-    _PROBE_DATA = {
-        "method": "recommended",
-        "sequence_text": ">probe\nSLYNTVATL",
-        "allele": "HLA-A*02:01",
-        "length": "9",
-    }
-
-    st.write(f"**Endpoint:** `{IEDB_MHCI_URL}`")
-
-    # Show any proxy env vars that might affect network routing
-    proxy_vars = {k: v for k, v in os.environ.items() if "proxy" in k.lower()}
-    if proxy_vars:
-        st.warning(f"Proxy env vars detected: {proxy_vars}")
-    else:
-        st.caption("No proxy environment variables set.")
-
-    _NETWORK_BLOCKED_MSG = (
-        ":warning: **IEDB is not reachable from this deployment.** "
-        "IEDB blocks connections from cloud-hosted servers (e.g. Streamlit Community Cloud). "
-        "**Run the app locally** to use MHC-I predictions."
-    )
-
-    # ── Test 1: plain requests (no retry adapter) ──────────────────────────────
-    st.write("**Test 1 — raw `requests.post` (no retry adapter, 10 s connect timeout):**")
-    try:
-        resp = _req.post(IEDB_MHCI_URL, data=_PROBE_DATA, timeout=(10, 30))
-        if resp.ok and resp.text.strip():
-            st.success(f"OK — HTTP {resp.status_code}, {len(resp.text.splitlines())} line(s).")
-        else:
-            st.error(f"Unexpected response — HTTP {resp.status_code}: {resp.text[:200]}")
-    except _req.exceptions.ConnectTimeout:
-        st.error(_NETWORK_BLOCKED_MSG)
-    except Exception as exc:
-        st.error(f"{type(exc).__name__}: {exc}")
-        st.code(traceback.format_exc(), language="text")
-        return
-
-    # ── Test 2: session with retry adapter (same as call_iedb_mhci) ────────────
-    st.write("**Test 2 — retry-session (same code path as real predictions, 15 s connect timeout):**")
-    try:
-        resp2 = _iedb_session().post(IEDB_MHCI_URL, data=_PROBE_DATA, timeout=(15, 60))
-        if resp2.ok and resp2.text.strip():
-            st.success(f"OK — HTTP {resp2.status_code}, {len(resp2.text.splitlines())} line(s).")
-        else:
-            st.error(f"Unexpected response — HTTP {resp2.status_code}: {resp2.text[:200]}")
-    except _req.exceptions.ConnectTimeout:
-        st.error(_NETWORK_BLOCKED_MSG)
-    except Exception as exc:
-        st.error(f"{type(exc).__name__}: {exc}")
-        st.code(traceback.format_exc(), language="text")
-
-
-def _render_iedb_tab(df: pd.DataFrame) -> None:
+def _render_mhci_tab(df: pd.DataFrame) -> None:
+    """MHC-I binding/presentation prediction using locally-installed open-source tools."""
     st.markdown(
-        "MHC Class I binding prediction via the "
-        "[IEDB Tools REST API](https://tools.iedb.org/main/tools-api/), "
-        "applied to the peptides in this dataset."
-    )
-    st.info(
-        "**IEDB usage guidelines** — jobs are submitted one at a time; "
-        f"large inputs (>{IEDB_THRESHOLD:,} combinations) require a notification email; "
-        "requests are split into per-allele / per-length batches."
+        "Run MHC Class I binding and presentation predictions on the peptides in this "
+        "dataset using locally-installed open-source ML tools — no external API required."
     )
 
-    with st.expander("Diagnostics — Test IEDB Connectivity"):
-        st.caption(
-            "Sends a probe peptide via two code paths: plain requests (fast) and the "
-            "retry-session adapter used by real predictions. Fails in either path reveal "
-            "whether the adapter or the server itself is the issue."
+    available = get_available_predictors()
+    available_names = [cls.name for cls in available]
+
+    # ── Predictor availability status ─────────────────────────────────────────
+    with st.expander("Predictor availability"):
+        status_rows = predictor_status_table()
+        st.dataframe(
+            pd.DataFrame(status_rows)[["Tool", "Available", "Description"]],
+            use_container_width=True,
+            hide_index=True,
         )
-        if st.button("Test IEDB connection", key="iedb_diag_test"):
-            _test_iedb_connection()
+
+    if not available:
+        st.warning(
+            "No prediction tools are installed.  "
+            "Install MHCflurry (`pip install mhcflurry && mhcflurry-downloads fetch`), "
+            "NetMHCpan (https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/), "
+            "BigMHC (`pip install bigmhc`), TransHLA (`pip install TransHLA`), "
+            "or UniPMT, then restart the app."
+        )
+        return
 
     # ── Configuration widgets ─────────────────────────────────────────────────
     for _cfg_key, _cfg_default in [
-        ("iedb_cfg_alleles", ["HLA-A*02:01"]),
-        ("iedb_cfg_lengths", [9]),
-        ("iedb_cfg_custom", ""),
-        ("iedb_cfg_method", "recommended"),
+        ("mhci_cfg_tool", available_names[0]),
+        ("mhci_cfg_alleles", ["HLA-A*02:01"]),
+        ("mhci_cfg_lengths", [9]),
+        ("mhci_cfg_custom", ""),
     ]:
         if _cfg_key not in st.session_state:
             st.session_state[_cfg_key] = _cfg_default
 
-    _ia, _il, _im = st.columns([3, 2, 2])
+    _it, _ia, _il = st.columns([2, 3, 2])
+    with _it:
+        st.selectbox(
+            "Prediction tool",
+            options=available_names,
+            key="mhci_cfg_tool",
+        )
     with _ia:
         st.multiselect(
             "HLA Alleles",
-            options=IEDB_ALLELES,
-            key="iedb_cfg_alleles",
+            options=PRED_ALLELES,
+            key="mhci_cfg_alleles",
         )
         st.text_input(
             "Custom allele (comma-separated)",
-            key="iedb_cfg_custom",
+            key="mhci_cfg_custom",
             placeholder="HLA-A*68:01",
         )
     with _il:
         st.multiselect(
             "Peptide Lengths (mer)",
-            options=[8, 9, 10, 11],
-            key="iedb_cfg_lengths",
-        )
-    with _im:
-        st.selectbox(
-            "Prediction Method",
-            options=IEDB_METHODS,
-            key="iedb_cfg_method",
-            help="'recommended' selects the best available method per allele.",
+            options=PRED_LENGTHS,
+            key="mhci_cfg_lengths",
         )
 
-    sel_alleles: list[str] = list(st.session_state.get("iedb_cfg_alleles", []))
-    custom_raw: str = st.session_state.get("iedb_cfg_custom", "").strip()
+    sel_tool: str = st.session_state.get("mhci_cfg_tool", available_names[0])
+    sel_alleles: list[str] = list(st.session_state.get("mhci_cfg_alleles", []))
+    custom_raw: str = st.session_state.get("mhci_cfg_custom", "").strip()
     if custom_raw:
         seen: set[str] = set(sel_alleles)
         for a in custom_raw.split(","):
@@ -761,8 +604,7 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
             if a and a not in seen:
                 sel_alleles.append(a)
                 seen.add(a)
-    sel_lengths: list[int] = list(st.session_state.get("iedb_cfg_lengths", []))
-    sel_method: str = st.session_state.get("iedb_cfg_method", "recommended")
+    sel_lengths: list[int] = list(st.session_state.get("mhci_cfg_lengths", []))
 
     if not sel_alleles or not sel_lengths:
         st.warning("Select at least one HLA allele and one peptide length to run predictions.")
@@ -772,125 +614,99 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
     unique_peptides: list[str] = (
         df["_peptide"].dropna().unique().tolist() if "_peptide" in df.columns else []
     )
-    matching_peptides: list[str] = [
-        p for p in unique_peptides if len(p) in set(sel_lengths)
-    ]
+    matching_peptides: list[str] = [p for p in unique_peptides if len(p) in set(sel_lengths)]
 
     st.caption(
         f"{len(unique_peptides):,} unique peptides in dataset · "
         f"{len(matching_peptides):,} match the selected length(s)"
     )
 
-    if len(matching_peptides) > 2_000:
+    if len(matching_peptides) > 5_000:
         st.warning(
-            f"{len(matching_peptides):,} peptides will be submitted — "
-            "this may take several minutes."
+            f"{len(matching_peptides):,} peptides will be scored — "
+            "this may take several minutes depending on the tool and your hardware."
         )
 
-    # ── Email for large jobs ──────────────────────────────────────────────────
-    # Each matching peptide is submitted once per allele (filtered to its own
-    # length), so the combination count is peptides × alleles, not ×lengths.
-    n_comb = len(matching_peptides) * len(sel_alleles)
-    job_email = _resolve_iedb_email(n_comb)
-
     # ── Run button ────────────────────────────────────────────────────────────
-    if st.button("Run IEDB Prediction", type="primary", key="iedb_tab_run"):
+    if st.button("Run Prediction", type="primary", key="mhci_tab_run"):
         if not matching_peptides:
             st.error(
                 "No peptides in the dataset match the selected lengths. "
                 "Adjust the Peptide Lengths above."
             )
         else:
-            batches = [(a, l) for a in sel_alleles for l in sel_lengths]
-            frames, errs, failed = _run_iedb_batches(
-                batches, matching_peptides, sel_method, job_email
-            )
-
-            if frames:
-                existing = st.session_state.get("iedb_tab_results")
-                combined = pd.concat(
-                    ([existing] if existing is not None else []) + frames,
-                    ignore_index=True,
+            with st.status(
+                f"Running {sel_tool} on {len(matching_peptides):,} peptide(s) × "
+                f"{len(sel_alleles)} allele(s)…",
+                expanded=True,
+            ) as status:
+                result_df, errors = run_prediction(
+                    matching_peptides, sel_alleles, sel_lengths, sel_tool
                 )
-                st.session_state["iedb_tab_results"] = combined
-            elif not errs:
-                st.error("No results returned from the IEDB API.")
+                if errors:
+                    for err in errors:
+                        st.write(f":x: {err}")
+                    status.update(label="Prediction failed", state="error")
+                elif result_df.empty:
+                    st.write(":warning: No results returned.")
+                    status.update(label="No results", state="error")
+                else:
+                    st.write(f":white_check_mark: {len(result_df):,} predictions complete.")
+                    status.update(label="Done", state="complete", expanded=False)
 
-            if failed:
-                st.session_state["iedb_tab_failed"] = failed
-            else:
-                st.session_state.pop("iedb_tab_failed", None)
-
-    # ── Retry failed batches ──────────────────────────────────────────────────
-    failed_batches: list[tuple[str, int]] = st.session_state.get("iedb_tab_failed", [])
-    if failed_batches:
-        batch_labels = ", ".join(f"{a} {l}-mer" for a, l in failed_batches)
-        st.warning(
-            f"{len(failed_batches)} batch(es) failed: {batch_labels}. "
-            "Check your connection and retry below."
-        )
-        if st.button("Retry failed batches", key="iedb_tab_retry"):
-            frames, errs, still_failed = _run_iedb_batches(
-                failed_batches, matching_peptides, sel_method, job_email
-            )
-            if frames:
-                existing = st.session_state.get("iedb_tab_results")
-                combined = pd.concat(
-                    ([existing] if existing is not None else []) + frames,
-                    ignore_index=True,
-                )
-                st.session_state["iedb_tab_results"] = combined
-            if still_failed:
-                st.session_state["iedb_tab_failed"] = still_failed
-            else:
-                st.session_state.pop("iedb_tab_failed", None)
+            if not result_df.empty:
+                st.session_state["mhci_tab_results"] = result_df
+            for err in errors:
+                st.warning(err)
 
     # ── Results ───────────────────────────────────────────────────────────────
-    if "iedb_tab_results" in st.session_state:
-        result_df = iedb_postprocess(st.session_state["iedb_tab_results"])
+    if "mhci_tab_results" in st.session_state:
+        result_df = pred_postprocess(st.session_state["mhci_tab_results"])
 
         display_cols = [
-            c for c in ["allele", "peptide", "rank", "ic50", "binding_level"]
+            c for c in ["tool", "allele", "peptide", "score", "rank", "ic50", "binding_level"]
             if c in result_df.columns
         ]
 
         if not display_cols:
-            st.warning("Could not parse IEDB response columns.")
+            st.warning("Unexpected result format.")
             st.code(str(result_df.columns.tolist()))
         else:
             st.subheader(f"Results — {len(result_df):,} predictions")
 
             if "binding_level" in result_df.columns:
                 m1, m2, m3 = st.columns(3)
-                m1.metric(
-                    "Strong Binders (SB, IC50 < 50 nM)",
-                    int((result_df["binding_level"] == "SB").sum()),
-                )
-                m2.metric(
-                    "Weak Binders (WB, IC50 50–500 nM)",
-                    int((result_df["binding_level"] == "WB").sum()),
-                )
-                m3.metric(
-                    "Non-Binders (NB, IC50 ≥ 500 nM)",
-                    int((result_df["binding_level"] == "NB").sum()),
-                )
+                m1.metric("Strong Binders (SB)", int((result_df["binding_level"] == "SB").sum()))
+                m2.metric("Weak Binders (WB)", int((result_df["binding_level"] == "WB").sum()))
+                m3.metric("Non-Binders (NB)", int((result_df["binding_level"] == "NB").sum()))
 
             display_df = result_df[display_cols].copy()
-            for num_col in ("ic50", "rank"):
+            for num_col in ("score", "rank", "ic50"):
                 if num_col in display_df.columns:
                     display_df[num_col] = display_df[num_col].apply(
-                        lambda x: f"{float(x):.2f}" if pd.notna(x) else "—"
+                        lambda x: f"{float(x):.4f}" if pd.notna(x) and str(x) != "nan" else "—"
                     )
 
-            st.dataframe(display_df, use_container_width=True, height=420)
+            sort_col = next(
+                (c for c in ["rank", "score"] if c in display_df.columns), display_df.columns[0]
+            )
+            st.dataframe(
+                display_df.sort_values(sort_col, ascending=True, na_position="last"),
+                use_container_width=True,
+                height=420,
+            )
+            st.caption(
+                "**Binding level thresholds:** SB = Strong Binder (EL %rank ≤ 0.5% or IC50 < 50 nM), "
+                "WB = Weak Binder (EL %rank ≤ 2% or IC50 < 500 nM), NB = Non-Binder.  "
+                "Probability-based tools (BigMHC, TransHLA, UniPMT) use score ≥ 0.9 for SB, ≥ 0.5 for WB."
+            )
             st.download_button(
                 "Download Results CSV",
                 data=result_df[display_cols].to_csv(index=False).encode("utf-8"),
-                file_name="iedb_mhci_analysis_predictions.csv",
+                file_name="mhci_analysis_predictions.csv",
                 mime="text/csv",
-                key="iedb_tab_download",
+                key="mhci_tab_download",
             )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SCREEN 3 — QC Report
@@ -1241,7 +1057,7 @@ def render_report() -> None:
 
     # ── Tab 12: MHC-I Prediction ──────────────────────────────────────────────
     with tabs[12]:
-        _render_iedb_tab(df)
+        _render_mhci_tab(df)
 
     # ── Downloads ─────────────────────────────────────────────────────────────
     st.divider()
