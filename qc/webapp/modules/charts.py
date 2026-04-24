@@ -310,20 +310,28 @@ def chart_sample_intensity_correlation(
         xa = np.log2(sub[ca])
         ya = np.log2(sub[cb])
         r, _ = pearsonr(xa, ya)
+
+        mn = min(xa.min(), ya.min())
+        mx = max(xa.max(), ya.max())
+        pad = (mx - mn) * 0.05
+        axis_range = [mn - pad, mx + pad]
+
         fig.add_trace(
-            go.Scattergl(
+            go.Scatter(
                 x=xa, y=ya, mode="markers",
                 marker=dict(size=3, opacity=0.4, color=SAMPLE_COLORS[idx % len(SAMPLE_COLORS)]),
                 name=f"r={r:.3f}", showlegend=True,
+                cliponaxis=True,
             ),
             row=row, col=col,
         )
-        mn, mx = min(xa.min(), ya.min()), max(xa.max(), ya.max())
         fig.add_trace(
             go.Scatter(x=[mn, mx], y=[mn, mx], mode="lines",
                        line=dict(color="red", dash="dash", width=1), showlegend=False),
             row=row, col=col,
         )
+        fig.update_xaxes(range=axis_range, row=row, col=col)
+        fig.update_yaxes(range=axis_range, row=row, col=col)
 
     fig.update_layout(
         title="Sample Intensity Correlations (Log₂, peptides detected in both samples)",

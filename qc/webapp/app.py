@@ -54,17 +54,25 @@ check_prototype_gate()
 # ── Sidebar: application title (appears above navigation links) ───────────────
 
 with st.sidebar:
-    st.markdown("**Immunopeptidomics QC**")
+    st.markdown(
+        """
+        <div style="padding: 0.5rem 0 0.75rem 0;">
+            <div style="font-size: 1.4rem; font-weight: 700; line-height: 1.2;">IPQC</div>
+            <div style="font-size: 0.85rem; color: #888; margin-top: 2px;">Immunopeptidomics QC</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ── Navigation ────────────────────────────────────────────────────────────────
 
 pg = st.navigation([
-    st.Page("pages/2_About.py", title="About"),
-    st.Page("pages/3_Glossary.py", title="Glossary"),
-    st.Page("pages/analysis.py", title="Analysis"),
-    st.Page("pages/4_My_Runs.py", title="My Runs"),
-    st.Page("pages/5_Compare_Runs.py", title="Compare Runs"),
-    st.Page("pages/6_IEDB_Prediction.py", title="MHC-I Prediction"),
+    st.Page("pages/2_About.py",           title="About",           icon=":material/info:"),
+    st.Page("pages/3_Glossary.py",        title="Glossary",        icon=":material/menu_book:"),
+    st.Page("pages/analysis.py",          title="Analysis",        icon=":material/science:"),
+    st.Page("pages/4_My_Runs.py",         title="My Runs",         icon=":material/folder_open:"),
+    st.Page("pages/5_Compare_Runs.py",    title="Compare Runs",    icon=":material/compare_arrows:"),
+    st.Page("pages/6_IEDB_Prediction.py", title="MHC-I Prediction",icon=":material/biotech:"),
 ])
 
 # ── Sidebar: auth block + footer (appears below navigation links) ─────────────
