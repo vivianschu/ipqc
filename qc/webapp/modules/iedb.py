@@ -15,16 +15,17 @@ IEDB_MHCI_URL = "https://tools.iedb.org/tools_api/mhci/"
 LONG_JOB_THRESHOLD = 500
 
 # TCP connect + TLS handshake timeout (seconds).
-# 60 s accommodates slow DNS, TLS negotiation, and an overloaded server.
-_CONNECT_TIMEOUT = 60
+# 15 s is generous for a healthy server; keeps the failure-feedback loop short
+# so users aren't blocked for minutes before seeing an error.
+_CONNECT_TIMEOUT = 15
 # Read timeout (seconds) — large jobs can take several minutes to compute.
 _READ_TIMEOUT = 600
 
-# Retry policy: up to 3 connect-level retries and 3 status-error retries,
-# with exponential backoff (2 s, 4 s, 8 s) between attempts.
+# Retry policy: up to 4 connect-level retries with exponential backoff
+# (2 s, 4 s, 8 s, 16 s).  Total wait before giving up: ~4 × 15 s + 30 s = ~90 s.
 _RETRY = Retry(
-    total=3,
-    connect=3,
+    total=4,
+    connect=4,
     read=2,
     backoff_factor=2,
     status_forcelist=[500, 502, 503, 504],
@@ -89,9 +90,10 @@ def call_iedb_mhci(
         )
     except requests.exceptions.ConnectTimeout:
         raise RuntimeError(
-            f"Could not connect to the IEDB server within {_CONNECT_TIMEOUT} s "
-            f"(tried 3 times). The server may be temporarily overloaded — "
-            "wait a minute and try again."
+            f"Could not connect to the IEDB server (timed out after {_CONNECT_TIMEOUT} s "
+            f"× {_RETRY.total + 1} attempts). "
+            "The server may be temporarily overloaded — wait a moment and use the "
+            "Retry button below."
         )
     except requests.exceptions.ReadTimeout:
         raise RuntimeError(
