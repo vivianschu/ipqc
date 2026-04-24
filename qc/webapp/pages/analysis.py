@@ -47,6 +47,7 @@ from modules.charts import (
 )
 from modules.database import (
     create_user,
+    get_user_by_id,
     get_user_by_username,
     init_db,
     save_run as db_save_run,
@@ -75,7 +76,6 @@ from modules.metrics import (
 )
 from modules.iedb import (
     COMMON_ALLELES as IEDB_ALLELES,
-    IEDB_EMAIL,
     LONG_JOB_THRESHOLD as IEDB_THRESHOLD,
     METHODS as IEDB_METHODS,
     call_iedb_mhci,
@@ -569,9 +569,112 @@ def render_mapping() -> None:
 # IEDB MHC-I Prediction tab (embedded inside Screen 3)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _render_iedb_tab(df: pd.DataFrame) -> None:
+def _resolve_iedb_email(n_comb: int) -> str | None:
+    """Return a notification email for large IEDB jobs, or None for small ones.
+
+    Uses the logged-in user's email when available; otherwise shows a text input.
+    For small jobs (≤ LONG_JOB_THRESHOLD) always returns None.
+    """
+    if n_comb <= IEDB_THRESHOLD:
+        return None
+
+    user_email: str = ""
+    user_id = st.session_state.get("user_id")
+    if user_id:
+        rec = get_user_by_id(int(user_id))
+        user_email = (rec or {}).get("email") or ""
+
+    if user_email:
+        st.info(
+            f":envelope: Large job ({n_comb:,} combinations) — "
+            f"IEDB notification email: `{user_email}`"
+        )
+        return user_email
+
+    entered = st.text_input(
+        "Email for IEDB job notification",
+        key="iedb_tab_email",
+        placeholder="your@email.com",
+        help=(
+            f"This job has {n_comb:,} combinations (>{IEDB_THRESHOLD:,}). "
+            "IEDB requires an email address for large jobs."
+        ),
+    )
+    if entered:
+        st.info(
+            f":envelope: Large job ({n_comb:,} combinations) — "
+            f"notification will be sent to `{entered}`."
+        )
+    else:
+        st.warning(
+            f":envelope: Large job ({n_comb:,} combinations) — "
+            "enter an email above so IEDB can notify you on completion."
+        )
+    return entered or None
+
+
+def _run_iedb_batches(
+    batches: list[tuple[str, int]],
+    matching_peptides: list[str],
+    sel_method: str,
+    job_email: str | None,
+) -> tuple[list[pd.DataFrame], list[str], list[tuple[str, int]]]:
+    """Run a list of (allele, length) batches and return (frames, error_strings, failed_batches)."""
     import time
 
+    total = len(batches)
+    frames: list[pd.DataFrame] = []
+    errs: list[str] = []
+    failed: list[tuple[str, int]] = []
+
+    with st.status(
+        f"Running {total} batch(es) — {len(matching_peptides):,} peptides × {total} combination(s)…",
+        expanded=True,
+    ) as status:
+        progress = st.progress(0.0)
+
+        for idx, (allele, length) in enumerate(batches):
+            batch_seqs = [p for p in matching_peptides if len(p) == length]
+            if not batch_seqs:
+                continue
+
+            progress.progress(
+                idx / total,
+                text=f"{allele}  {length}-mer  ({idx + 1}/{total})",
+            )
+            try:
+                result = call_iedb_mhci(batch_seqs, allele, length, sel_method, job_email)
+                frames.append(result)
+                st.write(
+                    f":white_check_mark: {allele} {length}-mer — "
+                    f"{len(result):,} predictions"
+                )
+            except Exception as exc:
+                errs.append(f"{allele} / {length}-mer: {exc}")
+                failed.append((allele, length))
+                st.write(f":x: {allele} {length}-mer — {exc}")
+
+            if idx < total - 1:
+                time.sleep(0.5)
+
+        progress.progress(1.0, text="Done.")
+        if errs:
+            status.update(
+                label=f"Completed with {len(errs)} error(s)",
+                state="error",
+                expanded=True,
+            )
+        else:
+            status.update(
+                label=f"Done — {len(frames)} batch(es) complete",
+                state="complete",
+                expanded=False,
+            )
+
+    return frames, errs, failed
+
+
+def _render_iedb_tab(df: pd.DataFrame) -> None:
     st.markdown(
         "MHC Class I binding prediction via the "
         "[IEDB Tools REST API](https://tools.iedb.org/main/tools-api/), "
@@ -579,9 +682,8 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
     )
     st.info(
         "**IEDB usage guidelines** — jobs are submitted one at a time; "
-        f"large inputs (>{IEDB_THRESHOLD:,} combinations) automatically include "
-        f"a notification email (`{IEDB_EMAIL}`); "
-        "large requests are split into per-allele / per-length batches."
+        f"large inputs (>{IEDB_THRESHOLD:,} combinations) require a notification email; "
+        "requests are split into per-allele / per-length batches."
     )
 
     # ── Read config written in Step 2 ─────────────────────────────────────────
@@ -634,6 +736,10 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
             "this may take several minutes."
         )
 
+    # ── Email for large jobs ──────────────────────────────────────────────────
+    n_comb = len(matching_peptides) * len(sel_alleles) * len(sel_lengths)
+    job_email = _resolve_iedb_email(n_comb)
+
     # ── Run button ────────────────────────────────────────────────────────────
     if st.button("Run IEDB Prediction", type="primary", key="iedb_tab_run"):
         if not matching_peptides:
@@ -642,69 +748,49 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
                 "Adjust the Peptide Lengths in Step 2."
             )
         else:
-            n_comb = len(matching_peptides) * len(sel_alleles) * len(sel_lengths)
-            use_email = n_comb > IEDB_THRESHOLD
-
             batches = [(a, l) for a in sel_alleles for l in sel_lengths]
-            total = len(batches)
-            frames: list[pd.DataFrame] = []
-            errs: list[str] = []
-
-            with st.status(
-                f"Running {total} batch(es) — {len(matching_peptides):,} peptides × "
-                f"{len(sel_alleles)} allele(s) × {len(sel_lengths)} length(s)…",
-                expanded=True,
-            ) as status:
-                if use_email:
-                    st.write(
-                        f":envelope: Large job ({n_comb:,} combinations) — "
-                        f"`{IEDB_EMAIL}` included in requests."
-                    )
-                progress = st.progress(0.0)
-
-                for idx, (allele, length) in enumerate(batches):
-                    batch_seqs = [p for p in matching_peptides if len(p) == length]
-                    if not batch_seqs:
-                        continue
-
-                    progress.progress(
-                        idx / total,
-                        text=f"{allele}  {length}-mer  ({idx + 1}/{total})",
-                    )
-                    try:
-                        result = call_iedb_mhci(
-                            batch_seqs, allele, length, sel_method, use_email
-                        )
-                        frames.append(result)
-                        st.write(
-                            f":white_check_mark: {allele} {length}-mer — "
-                            f"{len(result):,} predictions"
-                        )
-                    except Exception as exc:
-                        errs.append(f"{allele} / {length}-mer: {exc}")
-                        st.write(f":x: {allele} {length}-mer — {exc}")
-
-                    if idx < total - 1:
-                        time.sleep(0.5)
-
-                progress.progress(1.0, text="Done.")
-                if errs:
-                    status.update(
-                        label=f"Completed with {len(errs)} error(s)",
-                        state="error",
-                        expanded=True,
-                    )
-                else:
-                    status.update(
-                        label=f"Done — {len(frames)} batch(es) complete",
-                        state="complete",
-                        expanded=False,
-                    )
+            frames, errs, failed = _run_iedb_batches(
+                batches, matching_peptides, sel_method, job_email
+            )
 
             if frames:
-                st.session_state["iedb_tab_results"] = pd.concat(frames, ignore_index=True)
+                existing = st.session_state.get("iedb_tab_results")
+                combined = pd.concat(
+                    ([existing] if existing is not None else []) + frames,
+                    ignore_index=True,
+                )
+                st.session_state["iedb_tab_results"] = combined
             elif not errs:
                 st.error("No results returned from the IEDB API.")
+
+            if failed:
+                st.session_state["iedb_tab_failed"] = failed
+            else:
+                st.session_state.pop("iedb_tab_failed", None)
+
+    # ── Retry failed batches ──────────────────────────────────────────────────
+    failed_batches: list[tuple[str, int]] = st.session_state.get("iedb_tab_failed", [])
+    if failed_batches:
+        batch_labels = ", ".join(f"{a} {l}-mer" for a, l in failed_batches)
+        st.warning(
+            f"{len(failed_batches)} batch(es) failed: {batch_labels}. "
+            "Check your connection and retry below."
+        )
+        if st.button("Retry failed batches", key="iedb_tab_retry"):
+            frames, errs, still_failed = _run_iedb_batches(
+                failed_batches, matching_peptides, sel_method, job_email
+            )
+            if frames:
+                existing = st.session_state.get("iedb_tab_results")
+                combined = pd.concat(
+                    ([existing] if existing is not None else []) + frames,
+                    ignore_index=True,
+                )
+                st.session_state["iedb_tab_results"] = combined
+            if still_failed:
+                st.session_state["iedb_tab_failed"] = still_failed
+            else:
+                st.session_state.pop("iedb_tab_failed", None)
 
     # ── Results ───────────────────────────────────────────────────────────────
     if "iedb_tab_results" in st.session_state:
@@ -790,35 +876,53 @@ def render_report() -> None:
         f"{len(df):,} peptides  ·  {len(sample_names)} samples"
     )
 
-    # ── Pre-compute all metrics ───────────────────────────────────────────────
-    with st.spinner("Computing QC metrics..."):
-        summary_df = compute_sample_summary(df, mapping)
-        dataset_stats = compute_dataset_stats(df, mapping)
-        contam_df = compute_contaminant_summary(df, mapping)
-        contam_proteins = compute_contaminant_proteins(df, mapping)
-        jaccard, shared, detected_sets = compute_overlap(df, mapping)
+    # ── Pre-compute all metrics with a visible progress bar ──────────────────
+    _load_heading = st.empty()
+    _load_bar = st.empty()
+    _load_heading.subheader("Generating report…")
+    _prog = _load_bar.progress(0, text="Computing sample summary…")
 
-        has_length = "_length" in df.columns
-        has_source = "_source" in df.columns
-        has_protein = "_protein" in df.columns and mapping.protein_col is not None
-        has_charge = mapping.charge_col is not None and mapping.charge_col in df.columns
-        has_gene = "_gene" in df.columns and mapping.gene_col is not None
+    summary_df = compute_sample_summary(df, mapping)
+    _prog.progress(15, text="Computing dataset statistics…")
 
-        pos_freq, all_aa_freq, mers9 = (
-            compute_aa_composition(df, 9)
-            if has_length
-            else (np.zeros((9, 20)), pd.Series(dtype=float), [])
-        )
-        pca_data = compute_pca(df, mapping)
+    dataset_stats = compute_dataset_stats(df, mapping)
+    _prog.progress(30, text="Analysing contaminants…")
 
-        charge_series: pd.Series | None = None
-        if has_charge:
-            charge_series = compute_charge_distribution(df, mapping.charge_col)
+    contam_df = compute_contaminant_summary(df, mapping)
+    contam_proteins = compute_contaminant_proteins(df, mapping)
+    _prog.progress(50, text="Computing peptide overlap…")
 
-        intensity_pairs = [
-            sd for sd in mapping.samples
-            if sd.intensity_col and sd.intensity_col in df.columns
-        ]
+    jaccard, shared, detected_sets = compute_overlap(df, mapping)
+    _prog.progress(65, text="Computing amino acid composition…")
+
+    has_length = "_length" in df.columns
+    has_source = "_source" in df.columns
+    has_protein = "_protein" in df.columns and mapping.protein_col is not None
+    has_charge = mapping.charge_col is not None and mapping.charge_col in df.columns
+    has_gene = "_gene" in df.columns and mapping.gene_col is not None
+
+    pos_freq, all_aa_freq, mers9 = (
+        compute_aa_composition(df, 9)
+        if has_length
+        else (np.zeros((9, 20)), pd.Series(dtype=float), [])
+    )
+    _prog.progress(80, text="Running PCA…")
+
+    pca_data = compute_pca(df, mapping)
+    _prog.progress(90, text="Computing charge distribution…")
+
+    charge_series: pd.Series | None = None
+    if has_charge:
+        charge_series = compute_charge_distribution(df, mapping.charge_col)
+
+    intensity_pairs = [
+        sd for sd in mapping.samples
+        if sd.intensity_col and sd.intensity_col in df.columns
+    ]
+
+    _prog.progress(100, text="Report ready!")
+    _load_heading.empty()
+    _load_bar.empty()
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     tabs = st.tabs([

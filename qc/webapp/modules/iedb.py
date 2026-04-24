@@ -10,9 +10,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 IEDB_MHCI_URL = "https://tools.iedb.org/tools_api/mhci/"
-IEDB_EMAIL = "unechoed@gmail.com"
 
-# Combinations above this threshold include an email address (rough 10-min proxy)
+# Combinations above this threshold should include a notification email
 LONG_JOB_THRESHOLD = 500
 
 # TCP connect + TLS handshake timeout (seconds).
@@ -64,13 +63,13 @@ def call_iedb_mhci(
     allele: str,
     length: int,
     method: str,
-    include_email: bool,
+    email: str | None = None,
 ) -> pd.DataFrame:
     """POST one prediction job to the IEDB MHC-I API and return a parsed DataFrame.
 
-    Uses a short connect timeout (15 s) so a dead host fails fast, and a long
-    read timeout (600 s) for large payloads.  Three automatic retries with
-    exponential backoff cover transient 5xx / network blips.
+    Pass *email* to include a notification address (required for large jobs per IEDB
+    guidelines).  Three automatic retries with exponential backoff cover transient
+    5xx / network blips.
     """
     fasta = "\n".join(f">seq{i + 1}\n{seq}" for i, seq in enumerate(sequences))
     data: dict[str, str] = {
@@ -79,8 +78,8 @@ def call_iedb_mhci(
         "allele": allele,
         "length": str(length),
     }
-    if include_email:
-        data["email_address"] = IEDB_EMAIL
+    if email:
+        data["email_address"] = email
 
     try:
         resp = _session().post(
@@ -125,14 +124,16 @@ def run_batched(
     alleles: list[str],
     lengths: list[int],
     method: str,
+    email: str | None = None,
     inter_batch_delay: float = 0.5,
 ) -> tuple[pd.DataFrame, list[str]]:
     """Run all allele × length batches sequentially, one job at a time.
 
+    *email* is passed to IEDB only for large jobs (> LONG_JOB_THRESHOLD combinations).
     Returns (combined_results_df, list_of_error_strings).
     """
     n_combinations = len(sequences) * len(alleles) * len(lengths)
-    use_email = n_combinations > LONG_JOB_THRESHOLD
+    job_email = email if (email and n_combinations > LONG_JOB_THRESHOLD) else None
 
     batches = [(a, l) for a in alleles for l in lengths]
     frames: list[pd.DataFrame] = []
@@ -140,7 +141,7 @@ def run_batched(
 
     for idx, (allele, length) in enumerate(batches):
         try:
-            df = call_iedb_mhci(sequences, allele, length, method, use_email)
+            df = call_iedb_mhci(sequences, allele, length, method, job_email)
             frames.append(df)
         except Exception as exc:
             errors.append(f"{allele} / {length}-mer: {exc}")
