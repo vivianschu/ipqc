@@ -373,11 +373,15 @@ div[data-testid="stPills"] button {
     width: fit-content;
 }
 
-/* Card body text */
-.card-body {
+/* Card snippet */
+.card-snippet {
     font-size: 0.82rem;
     color: #6b7280;
     line-height: 1.5;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 
 /* Count line */
@@ -385,6 +389,44 @@ div[data-testid="stPills"] button {
     font-size: 0.82rem;
     color: #6b7280;
     margin-bottom: 4px;
+}
+
+/* Subtle arrow toggle button */
+div[data-testid="stButton"].gloss-toggle > button {
+    background: none !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #9ca3af !important;
+    font-size: 0.7rem !important;
+    padding: 0 2px !important;
+    min-height: unset !important;
+    height: auto !important;
+    line-height: 1 !important;
+    width: fit-content !important;
+}
+div[data-testid="stButton"].gloss-toggle > button:hover {
+    color: #6b7280 !important;
+    background: none !important;
+}
+
+/* Detail panel */
+.detail-panel {
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin-bottom: 6px;
+}
+.detail-panel h4 {
+    margin: 0 0 6px 0;
+    font-size: 0.95rem;
+    color: #111827;
+}
+.detail-panel p {
+    margin: 0;
+    font-size: 0.85rem;
+    color: #374151;
+    line-height: 1.6;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -413,6 +455,18 @@ selected_cat = st.pills(
 filtered = TERMS if selected_cat == "All" else [t for t in TERMS if t["category"] == selected_cat]
 st.markdown(f'<div class="term-count">{len(filtered)} term{"s" if len(filtered) != 1 else ""}</div>', unsafe_allow_html=True)
 
+# ── Session state ─────────────────────────────────────────────────────────────
+
+if "glossary_selected" not in st.session_state:
+    st.session_state["glossary_selected"] = None
+
+
+def _toggle(name: str) -> None:
+    st.session_state["glossary_selected"] = (
+        None if st.session_state["glossary_selected"] == name else name
+    )
+
+
 # ── Card grid ─────────────────────────────────────────────────────────────────
 
 COLS = 3
@@ -423,15 +477,37 @@ for row in rows:
     for col, term in zip(cols, row):
         cat = term["category"]
         bg, fg = CATEGORY_COLORS.get(cat, ("#f3f4f6", "#374151"))
+        snippet = term["body"][:160].rstrip() + ("…" if len(term["body"]) > 160 else "")
+        is_open = st.session_state["glossary_selected"] == term["name"]
         badge = f'<span class="category-badge" style="background:{bg};color:{fg};">{cat}</span>'
         card_html = f"""
         <div class="glossary-card">
-            <div class="card-title">
-                <span>{term["name"]}</span>
-            </div>
+            <div class="card-title"><span>{term["name"]}</span></div>
             {badge}
-            <div class="card-body">{term["body"]}</div>
+            <div class="card-snippet">{snippet}</div>
         </div>
         """
         with col:
             st.markdown(card_html, unsafe_allow_html=True)
+            st.button(
+                "▲" if is_open else "▼",
+                key=f"gloss_{term['name']}",
+                on_click=_toggle,
+                args=(term["name"],),
+            )
+
+    selected_in_row = next(
+        (t for t in row if t["name"] == st.session_state["glossary_selected"]), None
+    )
+    if selected_in_row:
+        cat = selected_in_row["category"]
+        bg, fg = CATEGORY_COLORS.get(cat, ("#f3f4f6", "#374151"))
+        badge_html = f'<span class="category-badge" style="background:{bg};color:{fg};margin-bottom:8px;display:inline-block;">{cat}</span>'
+        st.markdown(
+            f"""<div class="detail-panel">
+                {badge_html}
+                <h4>{selected_in_row["name"]}</h4>
+                <p>{selected_in_row["body"]}</p>
+            </div>""",
+            unsafe_allow_html=True,
+        )
