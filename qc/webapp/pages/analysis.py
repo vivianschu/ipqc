@@ -454,7 +454,11 @@ def render_mapping() -> None:
                     key=f"sint_{i}",
                 )
             with c5:
-                st.markdown("<br>", unsafe_allow_html=True)
+                # Push button down to align with selectbox values (label height ≈ 1.75rem)
+                st.markdown(
+                    '<div style="height:1.75rem"></div>',
+                    unsafe_allow_html=True,
+                )
                 if st.button("×", key=f"srem_{i}", help="Remove this sample"):
                     rows_to_remove.append(i)
 

@@ -64,6 +64,7 @@ pg = st.navigation([
     st.Page("pages/analysis.py", title="Analysis"),
     st.Page("pages/4_My_Runs.py", title="My Runs"),
     st.Page("pages/5_Compare_Runs.py", title="Compare Runs"),
+    st.Page("pages/6_IEDB_Prediction.py", title="MHC-I Prediction"),
 ])
 
 # ── Sidebar: auth block + footer (appears below navigation links) ─────────────

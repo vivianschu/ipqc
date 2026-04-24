@@ -14,6 +14,11 @@ from modules.storage import deserialize_run
 
 init_db()
 
+st.markdown(
+    "<style>div[data-testid='column'] button p { white-space: nowrap; }</style>",
+    unsafe_allow_html=True,
+)
+
 st.title("My Runs")
 
 if not st.session_state.get("user_id"):
