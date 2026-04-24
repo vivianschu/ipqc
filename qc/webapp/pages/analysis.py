@@ -696,7 +696,7 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
         "requests are split into per-allele / per-length batches."
     )
 
-    with st.expander("Diagnostics — test IEDB connectivity"):
+    with st.expander("Diagnostics — Test IEDB Connectivity"):
         st.caption(
             "Sends a probe peptide via two code paths: plain requests (fast) and the "
             "retry-session adapter used by real predictions. Fails in either path reveal "

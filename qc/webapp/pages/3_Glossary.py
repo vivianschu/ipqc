@@ -327,40 +327,29 @@ div[data-testid="stPills"] button {
     font-weight: 500 !important;
 }
 
-/* Card grid wrapper */
-.glossary-grid {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
-    margin-top: 8px;
-}
-
-/* Individual card */
+/* Card */
 .glossary-card {
     background: white;
-    border: 1px solid #e5e7eb;
+    border: 1.5px solid #e5e7eb;
     border-radius: 10px;
     padding: 18px 18px 16px 18px;
     display: flex;
     flex-direction: column;
     gap: 8px;
-    height: 100%;
+    transition: border-color 0.15s, box-shadow 0.15s;
+    user-select: none;
+}
+.glossary-card.open {
+    border-color: #ea580c;
+    box-shadow: 0 0 0 1px #ea580c22;
 }
 
-/* Card title row */
+/* Card title */
 .card-title {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
     font-weight: 600;
     font-size: 0.95rem;
     color: #111827;
     line-height: 1.35;
-}
-.card-icon {
-    font-size: 0.9rem;
-    margin-top: 1px;
-    flex-shrink: 0;
 }
 
 /* Category badge */
@@ -373,7 +362,7 @@ div[data-testid="stPills"] button {
     width: fit-content;
 }
 
-/* Card snippet */
+/* Snippet */
 .card-snippet {
     font-size: 0.82rem;
     color: #6b7280;
@@ -384,29 +373,42 @@ div[data-testid="stPills"] button {
     overflow: hidden;
 }
 
+/* Hover outline: target the vertical block that contains a card and
+   has a hovered button inside it */
+div[data-testid="stVerticalBlock"]:has(.glossary-card):has(button:hover) .glossary-card:not(.open) {
+    border-color: #9ca3af;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+    cursor: pointer;
+}
+
+/* Invisible overlay button — absolutely fills the card area */
+div[data-testid="stVerticalBlock"]:has(.glossary-card) {
+    position: relative !important;
+}
+div[data-testid="stVerticalBlock"]:has(.glossary-card) > div[data-testid="stButton"] {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 5 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(.glossary-card) > div[data-testid="stButton"] button {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    opacity: 0 !important;
+    cursor: pointer !important;
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
 /* Count line */
 .term-count {
     font-size: 0.82rem;
     color: #6b7280;
     margin-bottom: 4px;
-}
-
-/* Subtle arrow toggle button */
-div[data-testid="stButton"].gloss-toggle > button {
-    background: none !important;
-    border: none !important;
-    box-shadow: none !important;
-    color: #9ca3af !important;
-    font-size: 0.7rem !important;
-    padding: 0 2px !important;
-    min-height: unset !important;
-    height: auto !important;
-    line-height: 1 !important;
-    width: fit-content !important;
-}
-div[data-testid="stButton"].gloss-toggle > button:hover {
-    color: #6b7280 !important;
-    background: none !important;
 }
 
 /* Detail panel */
@@ -480,9 +482,10 @@ for row in rows:
         snippet = term["body"][:160].rstrip() + ("…" if len(term["body"]) > 160 else "")
         is_open = st.session_state["glossary_selected"] == term["name"]
         badge = f'<span class="category-badge" style="background:{bg};color:{fg};">{cat}</span>'
+        card_cls = "glossary-card open" if is_open else "glossary-card"
         card_html = f"""
-        <div class="glossary-card">
-            <div class="card-title"><span>{term["name"]}</span></div>
+        <div class="{card_cls}">
+            <div class="card-title">{term["name"]}</div>
             {badge}
             <div class="card-snippet">{snippet}</div>
         </div>
@@ -490,7 +493,7 @@ for row in rows:
         with col:
             st.markdown(card_html, unsafe_allow_html=True)
             st.button(
-                "▲" if is_open else "▼",
+                " ",
                 key=f"gloss_{term['name']}",
                 on_click=_toggle,
                 args=(term["name"],),
