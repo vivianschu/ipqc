@@ -73,6 +73,14 @@ from modules.metrics import (
     compute_sample_summary,
     parse_charges,
 )
+from modules.iedb import (
+    COMMON_ALLELES as IEDB_ALLELES,
+    IEDB_EMAIL,
+    LONG_JOB_THRESHOLD as IEDB_THRESHOLD,
+    METHODS as IEDB_METHODS,
+    call_iedb_mhci,
+    postprocess as iedb_postprocess,
+)
 from modules.parsing import detect_delimiter, load_table
 from modules.report import build_csv_summary, build_html_report
 from modules.storage import serialize_run
@@ -518,6 +526,188 @@ def render_mapping() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# IEDB MHC-I Prediction tab (embedded inside Screen 3)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _render_iedb_tab(df: pd.DataFrame) -> None:
+    import time
+
+    st.markdown(
+        "Run MHC Class I binding prediction on peptides from this dataset using the "
+        "[IEDB Tools REST API](https://tools.iedb.org/main/tools-api/)."
+    )
+    st.info(
+        "**IEDB usage guidelines** — jobs are submitted one at a time; "
+        f"large inputs (>{IEDB_THRESHOLD:,} combinations) automatically include "
+        f"a notification email (`{IEDB_EMAIL}`); "
+        "large requests are split into per-allele / per-length batches."
+    )
+
+    # ── Configuration controls ────────────────────────────────────────────────
+    c_a, c_l, c_m = st.columns([3, 2, 2])
+    with c_a:
+        sel_alleles: list[str] = st.multiselect(
+            "HLA Alleles",
+            options=IEDB_ALLELES,
+            default=["HLA-A*02:01"],
+            key="iedb_tab_alleles",
+        )
+        custom_allele = st.text_input(
+            "Custom allele",
+            key="iedb_tab_custom_allele",
+            placeholder="HLA-A*68:01",
+        )
+        if custom_allele.strip():
+            seen: set[str] = set(sel_alleles)
+            for a in custom_allele.strip().split(","):
+                a = a.strip()
+                if a and a not in seen:
+                    sel_alleles.append(a)
+                    seen.add(a)
+
+    with c_l:
+        sel_lengths: list[int] = st.multiselect(
+            "Peptide Lengths (mer)",
+            options=[8, 9, 10, 11],
+            default=[9],
+            key="iedb_tab_lengths",
+        )
+
+    with c_m:
+        sel_method: str = st.selectbox(
+            "Prediction Method",
+            options=IEDB_METHODS,
+            index=0,
+            key="iedb_tab_method",
+            help=(
+                "'recommended' selects the best available method per allele. "
+                "Other options: NetMHCpan EL/BA, ANN, SMM, SMMPMBEC."
+            ),
+        )
+
+    # ── Derive peptides from the loaded dataset ───────────────────────────────
+    unique_peptides: list[str] = (
+        df["_peptide"].dropna().unique().tolist() if "_peptide" in df.columns else []
+    )
+    matching_peptides: list[str] = (
+        [p for p in unique_peptides if len(p) in set(sel_lengths)]
+        if sel_lengths
+        else []
+    )
+
+    st.caption(
+        f"{len(unique_peptides):,} unique peptides in dataset · "
+        f"{len(matching_peptides):,} match the selected length(s)"
+    )
+
+    if len(matching_peptides) > 2_000:
+        st.warning(
+            f"{len(matching_peptides):,} peptides will be submitted — this may take "
+            "several minutes. The IEDB API processes them in batches."
+        )
+
+    # ── Run button ────────────────────────────────────────────────────────────
+    if st.button("Run IEDB Prediction", type="primary", key="iedb_tab_run"):
+        if not sel_alleles:
+            st.error("Select at least one HLA allele.")
+        elif not sel_lengths:
+            st.error("Select at least one peptide length.")
+        elif not matching_peptides:
+            st.error(
+                "No peptides in the dataset match the selected lengths. "
+                "Check the length selection or the Peptide Length column mapping."
+            )
+        else:
+            n_comb = len(matching_peptides) * len(sel_alleles) * len(sel_lengths)
+            use_email = n_comb > IEDB_THRESHOLD
+
+            if use_email:
+                st.info(
+                    f"{n_comb:,} combinations (threshold: {IEDB_THRESHOLD:,}) — "
+                    f"email `{IEDB_EMAIL}` included in each request."
+                )
+
+            batches = [(a, l) for a in sel_alleles for l in sel_lengths]
+            total = len(batches)
+            progress = st.progress(0.0, text="Starting…")
+            frames: list[pd.DataFrame] = []
+            errs: list[str] = []
+
+            for idx, (allele, length) in enumerate(batches):
+                # Filter to only peptides of this exact length for this batch
+                batch_seqs = [p for p in matching_peptides if len(p) == length]
+                if not batch_seqs:
+                    continue
+                progress.progress(
+                    idx / total,
+                    text=f"Predicting {allele} {length}-mer ({idx + 1}/{total})…",
+                )
+                try:
+                    frames.append(
+                        call_iedb_mhci(batch_seqs, allele, length, sel_method, use_email)
+                    )
+                except Exception as exc:
+                    errs.append(f"{allele} / {length}-mer: {exc}")
+                if idx < total - 1:
+                    time.sleep(0.5)
+
+            progress.progress(1.0, text="Complete.")
+            for err in errs:
+                st.warning(err)
+
+            if frames:
+                st.session_state["iedb_tab_results"] = pd.concat(frames, ignore_index=True)
+            elif not errs:
+                st.error("No results returned from the IEDB API.")
+
+    # ── Results ───────────────────────────────────────────────────────────────
+    if "iedb_tab_results" in st.session_state:
+        result_df = iedb_postprocess(st.session_state["iedb_tab_results"])
+
+        display_cols = [
+            c for c in ["allele", "peptide", "rank", "ic50", "binding_level"]
+            if c in result_df.columns
+        ]
+
+        if not display_cols:
+            st.warning("Could not parse IEDB response columns.")
+            st.code(str(result_df.columns.tolist()))
+        else:
+            st.subheader(f"Results — {len(result_df):,} predictions")
+
+            if "binding_level" in result_df.columns:
+                m1, m2, m3 = st.columns(3)
+                m1.metric(
+                    "Strong Binders (SB, IC50 < 50 nM)",
+                    int((result_df["binding_level"] == "SB").sum()),
+                )
+                m2.metric(
+                    "Weak Binders (WB, IC50 50–500 nM)",
+                    int((result_df["binding_level"] == "WB").sum()),
+                )
+                m3.metric(
+                    "Non-Binders (NB, IC50 ≥ 500 nM)",
+                    int((result_df["binding_level"] == "NB").sum()),
+                )
+
+            display_df = result_df[display_cols].copy()
+            for num_col in ("ic50", "rank"):
+                if num_col in display_df.columns:
+                    display_df[num_col] = display_df[num_col].apply(
+                        lambda x: f"{float(x):.2f}" if pd.notna(x) else "—"
+                    )
+
+            st.dataframe(display_df, use_container_width=True, height=420)
+            st.download_button(
+                "Download Results CSV",
+                data=result_df[display_cols].to_csv(index=False).encode("utf-8"),
+                file_name="iedb_mhci_analysis_predictions.csv",
+                mime="text/csv",
+                key="iedb_tab_download",
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # SCREEN 3 — QC Report
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -598,6 +788,7 @@ def render_report() -> None:
         "Charge",
         "PCA",
         "Per-Sample",
+        "MHC-I Prediction",
     ])
 
     # ── Tab 0: Summary ────────────────────────────────────────────────────────
@@ -844,6 +1035,10 @@ def render_report() -> None:
                         st.image(f"data:image/png;base64,{b64}", use_column_width=True)
                     else:
                         st.caption("No 9-mer peptides detected in this sample.")
+
+    # ── Tab 12: MHC-I Prediction ──────────────────────────────────────────────
+    with tabs[12]:
+        _render_iedb_tab(df)
 
     # ── Downloads ─────────────────────────────────────────────────────────────
     st.divider()
