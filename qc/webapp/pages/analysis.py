@@ -489,12 +489,24 @@ def render_mapping() -> None:
         "Configure the IEDB binding prediction that will run in the "
         "**MHC-I Prediction** tab of the report."
     )
+
+    # Initialise session-state defaults exactly once so widget `key=` alone
+    # controls the value — mixing `key=` with `default=` can cause Streamlit to
+    # silently reset the widget during reruns triggered by other widgets.
+    for _cfg_key, _cfg_default in [
+        ("iedb_cfg_alleles", ["HLA-A*02:01"]),
+        ("iedb_cfg_lengths", [9]),
+        ("iedb_cfg_custom", ""),
+        ("iedb_cfg_method", "recommended"),
+    ]:
+        if _cfg_key not in st.session_state:
+            st.session_state[_cfg_key] = _cfg_default
+
     _ia, _il, _im = st.columns([3, 2, 2])
     with _ia:
         st.multiselect(
             "HLA Alleles",
             options=IEDB_ALLELES,
-            default=st.session_state.get("iedb_cfg_alleles", ["HLA-A*02:01"]),
             key="iedb_cfg_alleles",
         )
         st.text_input(
@@ -506,17 +518,12 @@ def render_mapping() -> None:
         st.multiselect(
             "Peptide Lengths (mer)",
             options=[8, 9, 10, 11],
-            default=st.session_state.get("iedb_cfg_lengths", [9]),
             key="iedb_cfg_lengths",
         )
     with _im:
-        _method_idx = IEDB_METHODS.index(
-            st.session_state.get("iedb_cfg_method", "recommended")
-        ) if st.session_state.get("iedb_cfg_method", "recommended") in IEDB_METHODS else 0
         st.selectbox(
             "Prediction Method",
             options=IEDB_METHODS,
-            index=_method_idx,
             key="iedb_cfg_method",
             help="'recommended' selects the best available method per allele.",
         )
@@ -737,7 +744,9 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
         )
 
     # ── Email for large jobs ──────────────────────────────────────────────────
-    n_comb = len(matching_peptides) * len(sel_alleles) * len(sel_lengths)
+    # Each matching peptide is submitted once per allele (filtered to its own
+    # length), so the combination count is peptides × alleles, not ×lengths.
+    n_comb = len(matching_peptides) * len(sel_alleles)
     job_email = _resolve_iedb_email(n_comb)
 
     # ── Run button ────────────────────────────────────────────────────────────

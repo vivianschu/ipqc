@@ -9,7 +9,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-IEDB_MHCI_URL = "https://tools.iedb.org/tools_api/mhci/"
+IEDB_MHCI_URL = "http://tools.iedb.org/tools_api/mhci/"
 
 # Combinations above this threshold should include a notification email
 LONG_JOB_THRESHOLD = 500

@@ -44,3 +44,6 @@ qc/webapp/.streamlit/secrets.toml
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Figures
+*.png
