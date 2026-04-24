@@ -15,14 +15,18 @@ IEDB_EMAIL = "unechoed@gmail.com"
 # Combinations above this threshold include an email address (rough 10-min proxy)
 LONG_JOB_THRESHOLD = 500
 
-# TCP connect timeout (seconds) — fail fast if the host is unreachable
-_CONNECT_TIMEOUT = 15
-# Read timeout (seconds) — large jobs can take several minutes to compute
+# TCP connect + TLS handshake timeout (seconds).
+# 60 s accommodates slow DNS, TLS negotiation, and an overloaded server.
+_CONNECT_TIMEOUT = 60
+# Read timeout (seconds) — large jobs can take several minutes to compute.
 _READ_TIMEOUT = 600
 
-# Retry on transient network errors: 3 attempts with exponential backoff (2 s, 4 s, 8 s)
+# Retry policy: up to 3 connect-level retries and 3 status-error retries,
+# with exponential backoff (2 s, 4 s, 8 s) between attempts.
 _RETRY = Retry(
     total=3,
+    connect=3,
+    read=2,
     backoff_factor=2,
     status_forcelist=[500, 502, 503, 504],
     allowed_methods=["POST"],
@@ -86,8 +90,9 @@ def call_iedb_mhci(
         )
     except requests.exceptions.ConnectTimeout:
         raise RuntimeError(
-            f"Could not reach {IEDB_MHCI_URL} within {_CONNECT_TIMEOUT} s. "
-            "Check your internet connection or try again later."
+            f"Could not connect to the IEDB server within {_CONNECT_TIMEOUT} s "
+            f"(tried 3 times). The server may be temporarily overloaded — "
+            "wait a minute and try again."
         )
     except requests.exceptions.ReadTimeout:
         raise RuntimeError(
