@@ -10,6 +10,9 @@ _PROTOTYPE_PASSWORD = "helab"
 
 _SIDEBAR_CSS = """
 <style>
+html, body, [class*="css"] {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
 [data-testid="collapsedControl"] { display: none; }
 section[data-testid="stSidebar"] { min-width: 220px !important; }
 </style>
