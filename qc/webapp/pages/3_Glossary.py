@@ -340,17 +340,11 @@ div[data-testid="stPills"] button {
     background: white;
     border: 1px solid #e5e7eb;
     border-radius: 10px;
-    padding: 18px 18px 14px 18px;
-    cursor: pointer;
-    transition: box-shadow 0.15s, border-color 0.15s;
-    min-height: 130px;
+    padding: 18px 18px 16px 18px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-}
-.glossary-card:hover {
-    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-    border-color: #d1d5db;
+    gap: 8px;
+    height: 100%;
 }
 
 /* Card title row */
@@ -379,15 +373,11 @@ div[data-testid="stPills"] button {
     width: fit-content;
 }
 
-/* Card snippet */
-.card-snippet {
+/* Card body text */
+.card-body {
     font-size: 0.82rem;
     color: #6b7280;
-    line-height: 1.45;
-    display: -webkit-box;
-    -webkit-line-clamp: 3;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
+    line-height: 1.5;
 }
 
 /* Count line */
@@ -395,27 +385,6 @@ div[data-testid="stPills"] button {
     font-size: 0.82rem;
     color: #6b7280;
     margin-bottom: 4px;
-}
-
-/* Detail panel */
-.detail-panel {
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    border-radius: 10px;
-    padding: 20px 24px;
-    margin-top: 4px;
-    margin-bottom: 8px;
-}
-.detail-panel h3 {
-    margin: 0 0 8px 0;
-    font-size: 1.05rem;
-    color: #111827;
-}
-.detail-panel p {
-    margin: 0;
-    font-size: 0.9rem;
-    color: #374151;
-    line-height: 1.65;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -444,19 +413,6 @@ selected_cat = st.pills(
 filtered = TERMS if selected_cat == "All" else [t for t in TERMS if t["category"] == selected_cat]
 st.markdown(f'<div class="term-count">{len(filtered)} term{"s" if len(filtered) != 1 else ""}</div>', unsafe_allow_html=True)
 
-# ── Session state for selected card ──────────────────────────────────────────
-
-if "glossary_selected" not in st.session_state:
-    st.session_state["glossary_selected"] = None
-
-
-def _select(name: str) -> None:
-    if st.session_state["glossary_selected"] == name:
-        st.session_state["glossary_selected"] = None
-    else:
-        st.session_state["glossary_selected"] = name
-
-
 # ── Card grid ─────────────────────────────────────────────────────────────────
 
 COLS = 3
@@ -467,47 +423,15 @@ for row in rows:
     for col, term in zip(cols, row):
         cat = term["category"]
         bg, fg = CATEGORY_COLORS.get(cat, ("#f3f4f6", "#374151"))
-        snippet = term["body"][:160].rstrip() + ("…" if len(term["body"]) > 160 else "")
-        is_selected = st.session_state["glossary_selected"] == term["name"]
-
-        badge = (
-            f'<span class="category-badge" style="background:{bg};color:{fg};">{cat}</span>'
-        )
-        card_border = "border: 1.5px solid #6366f1;" if is_selected else ""
-
+        badge = f'<span class="category-badge" style="background:{bg};color:{fg};">{cat}</span>'
         card_html = f"""
-        <div class="glossary-card" style="{card_border}">
+        <div class="glossary-card">
             <div class="card-title">
-                <span class="card-icon">🔬</span>
                 <span>{term["name"]}</span>
             </div>
             {badge}
-            <div class="card-snippet">{snippet}</div>
+            <div class="card-body">{term["body"]}</div>
         </div>
         """
         with col:
             st.markdown(card_html, unsafe_allow_html=True)
-            st.button(
-                "▼ Read more" if not is_selected else "▲ Close",
-                key=f"gloss_{term['name']}",
-                on_click=_select,
-                args=(term["name"],),
-                use_container_width=True,
-            )
-
-    # Show detail panel for any selected card in this row
-    selected_in_row = next((t for t in row if t["name"] == st.session_state["glossary_selected"]), None)
-    if selected_in_row:
-        cat = selected_in_row["category"]
-        bg, fg = CATEGORY_COLORS.get(cat, ("#f3f4f6", "#374151"))
-        badge_html = f'<span class="category-badge" style="background:{bg};color:{fg};margin-bottom:10px;display:inline-block;">{cat}</span>'
-        st.markdown(
-            f"""
-            <div class="detail-panel">
-                {badge_html}
-                <h3>{selected_in_row["name"]}</h3>
-                <p>{selected_in_row["body"]}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
