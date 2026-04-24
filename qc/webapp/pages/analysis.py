@@ -636,31 +636,52 @@ def _run_iedb_batches(
 
 
 def _test_iedb_connection() -> None:
-    """Quick connectivity probe — one peptide, HLA-A*02:01, 9-mer."""
-    import requests as _req
+    """Connectivity probe — tests both raw requests and the retry-session path."""
+    import os
+    import traceback
 
-    st.write(f"Endpoint: `{IEDB_MHCI_URL}`")
+    import requests as _req
+    from modules.iedb import _session as _iedb_session
+
+    _PROBE_DATA = {
+        "method": "recommended",
+        "sequence_text": ">probe\nSLYNTVATL",
+        "allele": "HLA-A*02:01",
+        "length": "9",
+    }
+
+    st.write(f"**Endpoint:** `{IEDB_MHCI_URL}`")
+
+    # Show any proxy env vars that might affect network routing
+    proxy_vars = {k: v for k, v in os.environ.items() if "proxy" in k.lower()}
+    if proxy_vars:
+        st.warning(f"Proxy env vars detected: {proxy_vars}")
+    else:
+        st.caption("No proxy environment variables set.")
+
+    # ── Test 1: plain requests (no retry adapter) ──────────────────────────────
+    st.write("**Test 1 — raw `requests.post` (no retry adapter, 10 s connect timeout):**")
     try:
-        resp = _req.post(
-            IEDB_MHCI_URL,
-            data={
-                "method": "recommended",
-                "sequence_text": ">probe\nSLYNTVATL",
-                "allele": "HLA-A*02:01",
-                "length": "9",
-            },
-            timeout=(10, 30),
-        )
+        resp = _req.post(IEDB_MHCI_URL, data=_PROBE_DATA, timeout=(10, 30))
         if resp.ok and resp.text.strip():
-            st.success(f"Connected — HTTP {resp.status_code}, {len(resp.text.splitlines())} line(s) returned.")
+            st.success(f"OK — HTTP {resp.status_code}, {len(resp.text.splitlines())} line(s).")
         else:
             st.error(f"Unexpected response — HTTP {resp.status_code}: {resp.text[:200]}")
-    except _req.exceptions.ConnectTimeout:
-        st.error("Connect timed out (10 s). The server is not reachable from this process.")
-    except _req.exceptions.ConnectionError as exc:
-        st.error(f"Connection error (DNS or network): {exc}")
     except Exception as exc:
         st.error(f"{type(exc).__name__}: {exc}")
+        st.code(traceback.format_exc(), language="text")
+
+    # ── Test 2: session with retry adapter (same as call_iedb_mhci) ────────────
+    st.write("**Test 2 — retry-session (same code path as real predictions, 15 s connect timeout):**")
+    try:
+        resp2 = _iedb_session().post(IEDB_MHCI_URL, data=_PROBE_DATA, timeout=(15, 60))
+        if resp2.ok and resp2.text.strip():
+            st.success(f"OK — HTTP {resp2.status_code}, {len(resp2.text.splitlines())} line(s).")
+        else:
+            st.error(f"Unexpected response — HTTP {resp2.status_code}: {resp2.text[:200]}")
+    except Exception as exc:
+        st.error(f"{type(exc).__name__}: {exc}")
+        st.code(traceback.format_exc(), language="text")
 
 
 def _render_iedb_tab(df: pd.DataFrame) -> None:
@@ -677,8 +698,9 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
 
     with st.expander("Diagnostics — test IEDB connectivity"):
         st.caption(
-            "Sends a single test peptide to the IEDB server from this Streamlit process. "
-            "Use this if predictions are timing out."
+            "Sends a probe peptide via two code paths: plain requests (fast) and the "
+            "retry-session adapter used by real predictions. Fails in either path reveal "
+            "whether the adapter or the server itself is the issue."
         )
         if st.button("Test IEDB connection", key="iedb_diag_test"):
             _test_iedb_connection()
