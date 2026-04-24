@@ -76,6 +76,7 @@ from modules.metrics import (
 )
 from modules.iedb import (
     COMMON_ALLELES as IEDB_ALLELES,
+    IEDB_MHCI_URL,
     LONG_JOB_THRESHOLD as IEDB_THRESHOLD,
     METHODS as IEDB_METHODS,
     call_iedb_mhci,
@@ -634,6 +635,34 @@ def _run_iedb_batches(
     return frames, errs, failed
 
 
+def _test_iedb_connection() -> None:
+    """Quick connectivity probe — one peptide, HLA-A*02:01, 9-mer."""
+    import requests as _req
+
+    st.write(f"Endpoint: `{IEDB_MHCI_URL}`")
+    try:
+        resp = _req.post(
+            IEDB_MHCI_URL,
+            data={
+                "method": "recommended",
+                "sequence_text": ">probe\nSLYNTVATL",
+                "allele": "HLA-A*02:01",
+                "length": "9",
+            },
+            timeout=(10, 30),
+        )
+        if resp.ok and resp.text.strip():
+            st.success(f"Connected — HTTP {resp.status_code}, {len(resp.text.splitlines())} line(s) returned.")
+        else:
+            st.error(f"Unexpected response — HTTP {resp.status_code}: {resp.text[:200]}")
+    except _req.exceptions.ConnectTimeout:
+        st.error("Connect timed out (10 s). The server is not reachable from this process.")
+    except _req.exceptions.ConnectionError as exc:
+        st.error(f"Connection error (DNS or network): {exc}")
+    except Exception as exc:
+        st.error(f"{type(exc).__name__}: {exc}")
+
+
 def _render_iedb_tab(df: pd.DataFrame) -> None:
     st.markdown(
         "MHC Class I binding prediction via the "
@@ -645,6 +674,14 @@ def _render_iedb_tab(df: pd.DataFrame) -> None:
         f"large inputs (>{IEDB_THRESHOLD:,} combinations) require a notification email; "
         "requests are split into per-allele / per-length batches."
     )
+
+    with st.expander("Diagnostics — test IEDB connectivity"):
+        st.caption(
+            "Sends a single test peptide to the IEDB server from this Streamlit process. "
+            "Use this if predictions are timing out."
+        )
+        if st.button("Test IEDB connection", key="iedb_diag_test"):
+            _test_iedb_connection()
 
     # ── Configuration widgets ─────────────────────────────────────────────────
     for _cfg_key, _cfg_default in [

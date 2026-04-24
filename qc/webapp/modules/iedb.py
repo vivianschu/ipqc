@@ -92,6 +92,7 @@ def call_iedb_mhci(
         raise RuntimeError(
             f"Could not connect to the IEDB server (timed out after {_CONNECT_TIMEOUT} s "
             f"× {_RETRY.total + 1} attempts). "
+            f"URL: {IEDB_MHCI_URL} — "
             "The server may be temporarily overloaded — wait a moment and use the "
             "Retry button below."
         )
@@ -101,7 +102,7 @@ def call_iedb_mhci(
             "The server may be overloaded — try a smaller batch or retry later."
         )
     except requests.exceptions.ConnectionError as exc:
-        raise RuntimeError(f"Network error contacting IEDB: {exc}") from exc
+        raise RuntimeError(f"Network error contacting IEDB ({IEDB_MHCI_URL}): {exc}") from exc
 
     resp.raise_for_status()
 
