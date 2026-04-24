@@ -9,7 +9,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-IEDB_MHCI_URL = "https://tools.iedb.org/tools_api/mhci/"
+IEDB_MHCI_URL = "https://tools-cluster-interface.iedb.org/tools_api/mhci/"
 
 # Combinations above this threshold should include a notification email
 LONG_JOB_THRESHOLD = 500
@@ -90,11 +90,10 @@ def call_iedb_mhci(
         )
     except requests.exceptions.ConnectTimeout:
         raise RuntimeError(
-            f"Could not connect to the IEDB server (timed out after {_CONNECT_TIMEOUT} s "
-            f"× {_RETRY.total + 1} attempts). "
-            f"URL: {IEDB_MHCI_URL} — "
-            "The server may be temporarily overloaded — wait a moment and use the "
-            "Retry button below."
+            f"Cannot reach the IEDB server ({IEDB_MHCI_URL}). "
+            "TCP connection timed out — this usually means the network this app is "
+            "running on is blocked by IEDB (e.g. Streamlit Community Cloud). "
+            "Run the app locally to use MHC-I predictions."
         )
     except requests.exceptions.ReadTimeout:
         raise RuntimeError(

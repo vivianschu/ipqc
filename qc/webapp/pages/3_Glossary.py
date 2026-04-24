@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import streamlit as st
+import streamlit.components.v1 as _components
 
 # ── Term data ─────────────────────────────────────────────────────────────────
 
@@ -327,7 +328,7 @@ div[data-testid="stPills"] button {
     font-weight: 500 !important;
 }
 
-/* Card */
+/* Card — hover handled directly on the element, perfectly per-card scoped */
 .glossary-card {
     background: white;
     border: 1.5px solid #e5e7eb;
@@ -336,12 +337,17 @@ div[data-testid="stPills"] button {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    cursor: pointer;
     transition: border-color 0.15s, box-shadow 0.15s;
     user-select: none;
 }
+.glossary-card:hover:not(.open) {
+    border-color: #9ca3af;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
 .glossary-card.open {
     border-color: #ea580c;
-    box-shadow: 0 0 0 1px #ea580c22;
+    box-shadow: 0 0 0 2px #ea580c18;
 }
 
 /* Card title */
@@ -373,35 +379,13 @@ div[data-testid="stPills"] button {
     overflow: hidden;
 }
 
-/* Hover outline: target the vertical block that contains a card and
-   has a hovered button inside it */
-div[data-testid="stVerticalBlock"]:has(.glossary-card):has(button:hover) .glossary-card:not(.open) {
-    border-color: #9ca3af;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    cursor: pointer;
-}
-
-/* Invisible overlay button — absolutely fills the card area */
-div[data-testid="stVerticalBlock"]:has(.glossary-card) {
-    position: relative !important;
-}
-div[data-testid="stVerticalBlock"]:has(.glossary-card) > div[data-testid="stButton"] {
-    position: absolute !important;
-    inset: 0 !important;
-    z-index: 5 !important;
+/* Hide the Streamlit button completely — JS handles the click */
+div[data-testid="stColumn"]:has(.glossary-card) div[data-testid="stButton"] {
+    height: 0 !important;
+    min-height: 0 !important;
+    overflow: hidden !important;
     margin: 0 !important;
     padding: 0 !important;
-}
-div[data-testid="stVerticalBlock"]:has(.glossary-card) > div[data-testid="stButton"] button {
-    position: absolute !important;
-    inset: 0 !important;
-    width: 100% !important;
-    height: 100% !important;
-    opacity: 0 !important;
-    cursor: pointer !important;
-    border: none !important;
-    background: transparent !important;
-    box-shadow: none !important;
 }
 
 /* Count line */
@@ -456,6 +440,37 @@ selected_cat = st.pills(
 
 filtered = TERMS if selected_cat == "All" else [t for t in TERMS if t["category"] == selected_cat]
 st.markdown(f'<div class="term-count">{len(filtered)} term{"s" if len(filtered) != 1 else ""}</div>', unsafe_allow_html=True)
+
+# ── JS: wire card clicks to their hidden Streamlit buttons ────────────────────
+# srcdoc iframes share the parent's origin so window.parent.document is accessible.
+_components.html("""
+<script>
+(function () {
+    function attach() {
+        var doc = window.parent.document;
+        doc.querySelectorAll('.glossary-card').forEach(function (card) {
+            if (card._gcAttached) return;
+            card._gcAttached = true;
+            card.addEventListener('click', function () {
+                var col = card.closest('[data-testid="stColumn"]');
+                if (!col) return;
+                var btn = col.querySelector('[data-testid="stButton"] button');
+                if (btn) btn.click();
+            });
+        });
+    }
+
+    attach();
+
+    // Re-attach after Streamlit re-renders the DOM
+    var timer;
+    new MutationObserver(function () {
+        clearTimeout(timer);
+        timer = setTimeout(attach, 80);
+    }).observe(window.parent.document.body, { childList: true, subtree: true });
+})();
+</script>
+""", height=0)
 
 # ── Session state ─────────────────────────────────────────────────────────────
 

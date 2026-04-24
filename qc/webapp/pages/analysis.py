@@ -659,6 +659,12 @@ def _test_iedb_connection() -> None:
     else:
         st.caption("No proxy environment variables set.")
 
+    _NETWORK_BLOCKED_MSG = (
+        ":warning: **IEDB is not reachable from this deployment.** "
+        "IEDB blocks connections from cloud-hosted servers (e.g. Streamlit Community Cloud). "
+        "**Run the app locally** to use MHC-I predictions."
+    )
+
     # ── Test 1: plain requests (no retry adapter) ──────────────────────────────
     st.write("**Test 1 — raw `requests.post` (no retry adapter, 10 s connect timeout):**")
     try:
@@ -667,9 +673,12 @@ def _test_iedb_connection() -> None:
             st.success(f"OK — HTTP {resp.status_code}, {len(resp.text.splitlines())} line(s).")
         else:
             st.error(f"Unexpected response — HTTP {resp.status_code}: {resp.text[:200]}")
+    except _req.exceptions.ConnectTimeout:
+        st.error(_NETWORK_BLOCKED_MSG)
     except Exception as exc:
         st.error(f"{type(exc).__name__}: {exc}")
         st.code(traceback.format_exc(), language="text")
+        return
 
     # ── Test 2: session with retry adapter (same as call_iedb_mhci) ────────────
     st.write("**Test 2 — retry-session (same code path as real predictions, 15 s connect timeout):**")
@@ -679,6 +688,8 @@ def _test_iedb_connection() -> None:
             st.success(f"OK — HTTP {resp2.status_code}, {len(resp2.text.splitlines())} line(s).")
         else:
             st.error(f"Unexpected response — HTTP {resp2.status_code}: {resp2.text[:200]}")
+    except _req.exceptions.ConnectTimeout:
+        st.error(_NETWORK_BLOCKED_MSG)
     except Exception as exc:
         st.error(f"{type(exc).__name__}: {exc}")
         st.code(traceback.format_exc(), language="text")
