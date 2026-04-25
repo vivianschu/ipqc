@@ -552,10 +552,9 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
     if not available:
         st.warning(
             "No prediction tools are installed.  "
-            "Install MHCflurry (`pip install mhcflurry && mhcflurry-downloads fetch`), "
-            "NetMHCpan (https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/), "
-            "BigMHC (`pip install bigmhc`), TransHLA (`pip install TransHLA`), "
-            "or UniPMT, then restart the app."
+            "Install MHCflurry (`pip install mhcflurry && mhcflurry-downloads fetch`) "
+            "or NetMHCpan (https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/), "
+            "then restart the app."
         )
         return
 
@@ -697,8 +696,7 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
             )
             st.caption(
                 "**Binding level thresholds:** SB = Strong Binder (EL %rank ≤ 0.5% or IC50 < 50 nM), "
-                "WB = Weak Binder (EL %rank ≤ 2% or IC50 < 500 nM), NB = Non-Binder.  "
-                "Probability-based tools (BigMHC, TransHLA, UniPMT) use score ≥ 0.9 for SB, ≥ 0.5 for WB."
+                "WB = Weak Binder (EL %rank ≤ 2% or IC50 < 500 nM), NB = Non-Binder."
             )
             st.download_button(
                 "Download Results CSV",

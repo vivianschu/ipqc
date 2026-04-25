@@ -19,7 +19,7 @@ import pandas as pd
 from .base import BaseMHCIPredictor, assign_binding_level
 
 _BINARY = "netMHCpan"
-_MODEL_INFO = "NetMHCpan 4.1"
+_MODEL_INFO = "NetMHCpan 4.2c"
 
 
 def _netmhcpan_version() -> str:
@@ -88,17 +88,32 @@ def _parse_netmhcpan_output(text: str, allele: str) -> list[dict]:
 class NetMHCpanPredictor(BaseMHCIPredictor):
     name = "NetMHCpan"
     description = (
-        "NetMHCpan 4.1 — state-of-the-art pan-allele MHC-I binding predictor "
+        "NetMHCpan 4.2c — state-of-the-art pan-allele MHC-I binding predictor "
         "from DTU Health Tech.  Returns EL score, EL %rank, and (with -BA) IC50/BA %rank."
     )
     install_hint = (
-        "Download from https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/\n"
-        "Follow the installation instructions and add 'netMHCpan' to your PATH."
+        "Download NetMHCpan 4.2c (not 4.2cstatic) from:\n"
+        "  https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/\n"
+        "Version 4.2c includes Darwin_arm64 binaries for Apple Silicon.\n"
+        "Add the install directory to PATH, then restart the app."
     )
 
     @classmethod
     def is_available(cls) -> bool:
-        return shutil.which(_BINARY) is not None
+        if shutil.which(_BINARY) is None:
+            return False
+        # The wrapper script may be on PATH but lack platform binaries (e.g. Darwin arm64).
+        # Do a cheap probe to confirm it actually runs.
+        try:
+            r = subprocess.run(
+                [_BINARY, "-h"], capture_output=True, text=True, timeout=10
+            )
+            combined = r.stdout + r.stderr
+            if "no binaries found" in combined or "no binaries" in combined.lower():
+                return False
+        except Exception:
+            return False
+        return True
 
     @classmethod
     def version(cls) -> str:
@@ -125,7 +140,7 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
 
                 fasta_path = Path(tmpdir) / f"peptides_{length}.faa"
                 fasta_path.write_text(
-                    "\n".join(f">pep{i}\n{seq}" for i, seq in enumerate(length_peptides))
+                    "\n".join(f">pep{i}\n{seq}" for i, seq in enumerate(length_peptides)) + "\n"
                 )
 
                 for allele in alleles:
@@ -135,9 +150,7 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
                         "-a", netmhcpan_allele,
                         "-l", str(length),
                         "-f", str(fasta_path),
-                        "-BA",          # include binding affinity predictions
-                        "-xls",         # machine-readable output
-                        "-xlsfile", "/dev/stdout",
+                        "-BA",
                     ]
                     try:
                         result = subprocess.run(
@@ -156,28 +169,18 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
                         )
 
                     if result.returncode != 0:
-                        # Try parsing stdout anyway; fall back to stderr message
-                        if not result.stdout.strip():
-                            raise RuntimeError(
-                                f"NetMHCpan failed ({allele} {length}-mer): "
-                                f"{result.stderr[:500]}"
-                            )
+                        raise RuntimeError(
+                            f"NetMHCpan failed ({allele} {length}-mer): "
+                            f"{(result.stderr or result.stdout)[:500]}"
+                        )
 
                     rows = _parse_netmhcpan_output(result.stdout, allele)
-                    if not rows:
-                        # -xls writes to file; try plain output instead
-                        cmd_plain = [
-                            _BINARY,
-                            "-a", netmhcpan_allele,
-                            "-l", str(length),
-                            "-f", str(fasta_path),
-                            "-BA",
-                        ]
-                        result2 = subprocess.run(
-                            cmd_plain, capture_output=True, text=True, timeout=300
+                    if not rows and result.stdout.strip():
+                        raise RuntimeError(
+                            f"NetMHCpan returned output that could not be parsed "
+                            f"({allele} {length}-mer). First 500 chars:\n"
+                            f"{result.stdout[:500]}"
                         )
-                        rows = _parse_netmhcpan_output(result2.stdout, allele)
-
                     all_rows.extend(rows)
 
         return pd.DataFrame(all_rows) if all_rows else self._empty_result()

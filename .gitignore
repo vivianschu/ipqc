@@ -47,3 +47,4 @@ htmlcov/
 
 # Figures
 *.png
+qc/webapp/tools/

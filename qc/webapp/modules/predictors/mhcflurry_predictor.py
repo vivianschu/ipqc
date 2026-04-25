@@ -78,7 +78,7 @@ class MHCflurryPredictor(BaseMHCIPredictor):
 
         pairs = list(iterproduct(filtered, alleles))
         try:
-            raw = predictor.predict_to_dataframe(
+            raw = predictor.predict(
                 peptides=[p for p, _ in pairs],
                 alleles=[a for _, a in pairs],
                 include_affinity_percentile=True,
@@ -86,14 +86,18 @@ class MHCflurryPredictor(BaseMHCIPredictor):
         except Exception as exc:
             raise RuntimeError(f"MHCflurry prediction call failed: {exc}") from exc
 
+        # MHCflurry predict() does not guarantee an "allele" column when alleles
+        # are passed as a parallel list, so we recover them from pairs by index.
+        pair_alleles = [a for _, a in pairs]
+
         model_info = f"MHCflurry {self.version()}"
         rows = []
-        for _, row in raw.iterrows():
+        for i, (_, row) in enumerate(raw.iterrows()):
+            allele = pair_alleles[i] if i < len(pair_alleles) else row.get("allele", "")
             ic50 = _to_float(row.get("affinity"))
             aff_rank = _to_float(row.get("affinity_percentile"))
             pres_rank = _to_float(row.get("presentation_percentile"))
             pres_score = _to_float(row.get("presentation_score"))
-            proc_score = _to_float(row.get("processing_score"))
 
             # Presentation %rank is the most biologically relevant ranking;
             # fall back to affinity %rank when the presentation model isn't loaded.
@@ -105,7 +109,7 @@ class MHCflurryPredictor(BaseMHCIPredictor):
 
             rows.append({
                 "peptide": row.get("peptide", ""),
-                "allele": row.get("allele", ""),
+                "allele": allele,
                 "score": score,
                 "rank": best_rank,
                 "ic50": ic50,

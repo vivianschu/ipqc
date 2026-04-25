@@ -1,0 +1,28 @@
+[server]
+# Bind only to localhost — Nginx is the public entry point.
+address = "127.0.0.1"
+port = 8501
+
+# Allow large peptide list uploads (50 MB).
+maxUploadSize = 50
+
+# Required for WebSocket proxying through Nginx.
+enableCORS = false
+enableXsrfProtection = true
+
+# Keep websocket alive through long predictor runs.
+maxMessageSize = 200
+
+[browser]
+# Tell Streamlit the public URL (used for link generation in the UI).
+serverAddress = "localhost"
+serverPort = 8501
+gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#1a6fa8"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f7fa"
+textColor = "#1a1a2e"
+font = "sans serif"

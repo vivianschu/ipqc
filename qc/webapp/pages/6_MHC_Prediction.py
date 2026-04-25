@@ -35,8 +35,6 @@ _BINDING_LEVEL_HELP = (
     "| **SB** Strong Binder | ≤ 0.5 % | < 50 nM |\n"
     "| **WB** Weak Binder | ≤ 2.0 % | < 500 nM |\n"
     "| **NB** Non-Binder | > 2.0 % | ≥ 500 nM |\n\n"
-    "For tools that output probability scores (BigMHC, TransHLA, UniPMT), "
-    "approximate thresholds score ≥ 0.9 → SB, ≥ 0.5 → WB are applied.  "
     "Scores from different tools are **not directly comparable** — always "
     "compare within the same tool."
 )

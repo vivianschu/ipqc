@@ -14,21 +14,22 @@ dependencies = [
     "logomaker>=0.8",
     "bcrypt>=4.0",
     "pyarrow>=14.0",
+    "mhcflurry>=2.2.1",
 ]
 
 [project.optional-dependencies]
-# MHC-I prediction backends — install whichever tools you have access to.
-# After installing mhcflurry, run: mhcflurry-downloads fetch
+# MHCflurry is the only predictor available on PyPI.
+# After adding it, download model weights: mhcflurry-downloads fetch (~500 MB)
 mhcflurry = ["mhcflurry>=2.0"]
-bigmhc    = ["bigmhc"]
-transhla  = ["TransHLA"]
-# NetMHCpan must be installed manually from DTU:
+
+# NetMHCpan must be installed manually (academic license required):
 #   https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/
-# UniPMT must be installed from GitHub:
-#   git clone https://github.com/IEDB-group/UniPMT && pip install -e UniPMT
+#   Then add the install directory to PATH.
 
-[project.scripts]
-qc-webapp = "app:main"
+[tool.setuptools.packages.find]
+# Only package the modules/ directory; exclude pages/ and data/ which are not
+# importable Python packages — they are Streamlit page scripts and runtime data.
+include = ["modules", "modules.*"]
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []

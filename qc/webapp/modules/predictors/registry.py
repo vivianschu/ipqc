@@ -2,19 +2,13 @@
 from __future__ import annotations
 
 from .base import BaseMHCIPredictor
-from .bigmhc_predictor import BigMHCPredictor
 from .mhcflurry_predictor import MHCflurryPredictor
 from .netmhcpan_predictor import NetMHCpanPredictor
-from .transhla_predictor import TransHLAPredictor
-from .unipmt_predictor import UniPMTPredictor
 
 # Ordered by priority / maturity
 ALL_PREDICTORS: list[type[BaseMHCIPredictor]] = [
     MHCflurryPredictor,
     NetMHCpanPredictor,
-    BigMHCPredictor,
-    TransHLAPredictor,
-    UniPMTPredictor,
 ]
 
 
