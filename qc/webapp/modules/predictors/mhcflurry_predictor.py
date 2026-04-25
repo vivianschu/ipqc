@@ -7,7 +7,6 @@ Install:
 from __future__ import annotations
 
 import math
-from itertools import product as iterproduct
 
 import pandas as pd
 
@@ -76,46 +75,40 @@ class MHCflurryPredictor(BaseMHCIPredictor):
                 "Class1PresentationPredictor.load().supported_alleles for the full list."
             )
 
-        pairs = list(iterproduct(filtered, alleles))
-        try:
-            raw = predictor.predict(
-                peptides=[p for p, _ in pairs],
-                alleles=[a for _, a in pairs],
-                include_affinity_percentile=True,
-            )
-        except Exception as exc:
-            raise RuntimeError(f"MHCflurry prediction call failed: {exc}") from exc
-
-        # MHCflurry predict() does not guarantee an "allele" column when alleles
-        # are passed as a parallel list, so we recover them from pairs by index.
-        pair_alleles = [a for _, a in pairs]
-
+        # Class1PresentationPredictor treats `alleles` as a genotype (≤6 alleles,
+        # returns best prediction per peptide).  Call once per allele for per-allele results.
         model_info = f"MHCflurry {self.version()}"
         rows = []
-        for i, (_, row) in enumerate(raw.iterrows()):
-            allele = pair_alleles[i] if i < len(pair_alleles) else row.get("allele", "")
-            ic50 = _to_float(row.get("affinity"))
-            aff_rank = _to_float(row.get("affinity_percentile"))
-            pres_rank = _to_float(row.get("presentation_percentile"))
-            pres_score = _to_float(row.get("presentation_score"))
+        for allele in alleles:
+            try:
+                raw = predictor.predict(
+                    peptides=filtered,
+                    alleles=[allele],
+                    include_affinity_percentile=True,
+                )
+            except Exception as exc:
+                raise RuntimeError(f"MHCflurry prediction call failed: {exc}") from exc
 
-            # Presentation %rank is the most biologically relevant ranking;
-            # fall back to affinity %rank when the presentation model isn't loaded.
-            best_rank = pres_rank if not math.isnan(pres_rank) else aff_rank
-            # Score: presentation_score when available, else affinity_percentile inverted
-            score = pres_score if not math.isnan(pres_score) else (
-                1.0 - aff_rank / 100.0 if not math.isnan(aff_rank) else float("nan")
-            )
+            for _, row in raw.iterrows():
+                ic50 = _to_float(row.get("affinity"))
+                aff_rank = _to_float(row.get("affinity_percentile"))
+                pres_rank = _to_float(row.get("presentation_percentile"))
+                pres_score = _to_float(row.get("presentation_score"))
 
-            rows.append({
-                "peptide": row.get("peptide", ""),
-                "allele": allele,
-                "score": score,
-                "rank": best_rank,
-                "ic50": ic50,
-                "binding_level": assign_binding_level(best_rank, ic50),
-                "tool": self.name,
-                "model_info": model_info,
-            })
+                best_rank = pres_rank if not math.isnan(pres_rank) else aff_rank
+                score = pres_score if not math.isnan(pres_score) else (
+                    1.0 - aff_rank / 100.0 if not math.isnan(aff_rank) else float("nan")
+                )
+
+                rows.append({
+                    "peptide": row.get("peptide", ""),
+                    "allele": allele,
+                    "score": score,
+                    "rank": best_rank,
+                    "ic50": ic50,
+                    "binding_level": assign_binding_level(best_rank, ic50),
+                    "tool": self.name,
+                    "model_info": model_info,
+                })
 
         return pd.DataFrame(rows)

@@ -39,46 +39,65 @@ def _allele_to_netmhcpan(allele: str) -> str:
 
 
 def _parse_netmhcpan_output(text: str, allele: str) -> list[dict]:
-    """Parse NetMHCpan tabular output into a list of row dicts."""
+    """Parse NetMHCpan tabular output into a list of row dicts.
+
+    Column positions are detected from the header line so this works with both
+    NetMHCpan 4.1 (Aff(nM) before %Rank_BA) and 4.2c (order swapped, no Exp col
+    on Darwin).
+    """
+    # Defaults match 4.2c Darwin_arm64 layout; overridden when header is found.
+    col_score_el = 11
+    col_rank_el = 12
+    col_rank_ba = 14
+    col_ic50 = 15
+
     rows = []
     for line in text.splitlines():
         line = line.strip()
-        # Data rows start with a position integer
         if not line or line.startswith("#") or line.startswith("-"):
             continue
         parts = line.split()
-        if not parts or not parts[0].isdigit():
+        if not parts:
             continue
-        # NetMHCpan 4.1 -BA output columns (approximate, may vary by version):
-        # Pos HLA Peptide Core Of Gp Gl Ip Il Icore Identity Score_EL %Rank_EL [Score_BA Aff(nM) %Rank_BA] BindLevel
+
+        # Detect column positions from the table header line (starts with "Pos")
+        if parts[0] == "Pos":
+            try:
+                col_score_el = parts.index("Score_EL")
+                col_rank_el  = parts.index("%Rank_EL")
+                if "%Rank_BA" in parts:
+                    col_rank_ba = parts.index("%Rank_BA")
+                if "Aff(nM)" in parts:
+                    col_ic50 = parts.index("Aff(nM)")
+            except ValueError:
+                pass
+            continue
+
+        if not parts[0].isdigit():
+            continue
+
         try:
-            peptide = parts[2]
-            score_el = float(parts[11])
-            rank_el = float(parts[12])
-            ic50 = float("nan")
-            rank_ba = float("nan")
-            bind_level_raw = ""
+            peptide  = parts[2]
+            score_el = float(parts[col_score_el])
+            rank_el  = float(parts[col_rank_el])
+            ic50     = float("nan")
+            rank_ba  = float("nan")
 
-            if len(parts) >= 17:
-                # BA columns present
-                ic50 = float(parts[14])
-                rank_ba = float(parts[15])
-                bind_level_raw = parts[16] if len(parts) > 16 else ""
-            elif len(parts) >= 14:
-                bind_level_raw = parts[13]
+            if len(parts) > col_ic50:
+                rank_ba = float(parts[col_rank_ba])
+                ic50    = float(parts[col_ic50])
 
-            # Prefer EL %rank (eluted ligand, more biologically relevant)
             rank = rank_el if not math.isnan(rank_el) else rank_ba
 
             rows.append({
-                "peptide": peptide,
-                "allele": allele,
-                "score": score_el,
-                "rank": rank,
-                "ic50": ic50,
+                "peptide":       peptide,
+                "allele":        allele,
+                "score":         score_el,
+                "rank":          rank,
+                "ic50":          ic50,
                 "binding_level": assign_binding_level(rank, ic50),
-                "tool": "NetMHCpan",
-                "model_info": _MODEL_INFO,
+                "tool":          "NetMHCpan",
+                "model_info":    _MODEL_INFO,
             })
         except (IndexError, ValueError):
             continue
