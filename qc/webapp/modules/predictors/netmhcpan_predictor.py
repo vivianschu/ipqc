@@ -1,9 +1,8 @@
-"""NetMHCpan 4.1 MHC-I predictor via subprocess.
+"""NetMHCpan 4.2c MHC-I predictor via subprocess.
 
-NetMHCpan is not pip-installable.  Download from:
-    https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/
-
-After installing, make sure 'netMHCpan' is on your PATH.
+NetMHCpan is not pip-installable.  The app first looks for the bundled copy at
+  <webapp_root>/tools/netMHCpan-4.2/netMHCpan
+and falls back to whatever 'netMHCpan' resolves to on PATH.
 """
 from __future__ import annotations
 
@@ -18,19 +17,21 @@ import pandas as pd
 
 from .base import BaseMHCIPredictor, assign_binding_level
 
-_BINARY = "netMHCpan"
+# Prefer the bundled binary shipped with the app; fall back to PATH.
+_BUNDLED_BINARY: Path = (
+    Path(__file__).parent.parent.parent / "tools" / "netMHCpan-4.2" / "netMHCpan"
+)
+_BINARY: str = str(_BUNDLED_BINARY) if _BUNDLED_BINARY.is_file() else "netMHCpan"
 _MODEL_INFO = "NetMHCpan 4.2c"
 
 
 def _netmhcpan_version() -> str:
+    version_file = _BUNDLED_BINARY.parent.parent / "data" / "version"
     try:
-        r = subprocess.run([_BINARY, "-h"], capture_output=True, text=True, timeout=10)
-        for line in (r.stdout + r.stderr).splitlines():
-            if "version" in line.lower() or "NetMHCpan" in line:
-                return line.strip()
-        return "NetMHCpan (version unknown)"
+        return version_file.read_text().strip()
     except Exception:
-        return "NetMHCpan (version unknown)"
+        pass
+    return "NetMHCpan (version unknown)"
 
 
 def _allele_to_netmhcpan(allele: str) -> str:
@@ -114,15 +115,20 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
         "Download NetMHCpan 4.2c (not 4.2cstatic) from:\n"
         "  https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/\n"
         "Version 4.2c includes Darwin_arm64 binaries for Apple Silicon.\n"
-        "Add the install directory to PATH, then restart the app."
+        f"Extract to: {_BUNDLED_BINARY.parent}  (bundled path the app checks first)\n"
+        "Or add the install directory to PATH, then restart the app."
     )
 
     @classmethod
     def is_available(cls) -> bool:
-        if shutil.which(_BINARY) is None:
+        # Accept either the bundled file or something on PATH.
+        binary_exists = (
+            Path(_BINARY).is_file() if Path(_BINARY).is_absolute()
+            else shutil.which(_BINARY) is not None
+        )
+        if not binary_exists:
             return False
-        # The wrapper script may be on PATH but lack platform binaries (e.g. Darwin arm64).
-        # Do a cheap probe to confirm it actually runs.
+        # Probe to confirm the wrapper script actually runs (checks platform binaries).
         try:
             r = subprocess.run(
                 [_BINARY, "-h"], capture_output=True, text=True, timeout=10
@@ -162,6 +168,10 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
                     "\n".join(f">pep{i}\n{seq}" for i, seq in enumerate(length_peptides)) + "\n"
                 )
 
+                # Scale timeout with peptide count: ~0.05 s/peptide (2× observed
+                # rate on Apple Silicon), minimum 120 s.
+                _timeout = max(120, len(length_peptides) * 0.05)
+
                 for allele in alleles:
                     netmhcpan_allele = _allele_to_netmhcpan(allele)
                     cmd = [
@@ -176,11 +186,14 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
                             cmd,
                             capture_output=True,
                             text=True,
-                            timeout=300,
+                            stdin=subprocess.DEVNULL,
+                            timeout=_timeout,
                         )
                     except subprocess.TimeoutExpired:
                         raise RuntimeError(
-                            f"NetMHCpan timed out for {allele} {length}-mer"
+                            f"NetMHCpan timed out for {allele} {length}-mer "
+                            f"({len(length_peptides):,} peptides, "
+                            f"limit {_timeout:.0f} s)"
                         )
                     except FileNotFoundError:
                         raise RuntimeError(

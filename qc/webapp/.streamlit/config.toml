@@ -3,8 +3,8 @@
 address = "127.0.0.1"
 port = 8501
 
-# Allow large peptide list uploads (50 MB).
-maxUploadSize = 50
+# Allow large peptide list uploads (100 MB).
+maxUploadSize = 100
 
 # Required for WebSocket proxying through Nginx.
 enableCORS = false

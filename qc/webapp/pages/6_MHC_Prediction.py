@@ -11,11 +11,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 from modules.prediction import (
     COMMON_ALLELES,
     SUPPORTED_LENGTHS,
+    calculate_binding_score,
     make_consensus_table,
     postprocess,
     predictor_status_table,
@@ -39,8 +41,90 @@ _BINDING_LEVEL_HELP = (
     "compare within the same tool."
 )
 
+_BINDING_SCORE_HELP = """\
+**Binding Score (BF Score)**
+
+A sample-level QC metric: the fraction of length-acceptable peptides
+predicted to bind at least one of the selected HLA alleles.
+
+**How it is calculated:**
+
+1. Peptides are filtered to the selected length range (e.g. 8–11-mers).
+2. For each peptide the *best* binding level across all alleles is determined:
+   - **SB** if any allele gives EL %Rank ≤ 0.5 %
+   - **WB** if any allele gives EL %Rank ≤ 2.0 %
+   - **NB** otherwise
+3. **Binding Score = (# peptides classified SB or WB) ÷ (# length-filtered peptides)**
+
+A higher score indicates that more of the sample's peptides are predicted to be
+MHC-presented.  Values close to 0 may indicate poor sample quality, a low-complexity
+peptide pool, or an allele mismatch between the sample donor and the selected alleles.
+
+*This metric mirrors the BF (binding fraction) score used by MhcVizPipe.*
+"""
+
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+_PEPTIDE_COL_NAMES = frozenset({
+    "peptide sequence", "peptide_sequence",
+    "peptide", "sequence", "seq",
+    "modified sequence", "modified_sequence",
+    "annotated sequence",
+})
+
+
+def _parse_peptide_file(content: str, filename: str) -> list[str]:
+    """Extract peptide sequences from a plain-text, CSV, or TSV file.
+
+    For delimited files the function searches column headers for a known
+    peptide-column name (case-insensitive); if none match it falls back to the
+    first column.  For plain-text files each non-empty line is returned as-is.
+    """
+    import csv
+    import io
+
+    lines = [ln for ln in content.splitlines() if ln.strip()]
+    if not lines:
+        return []
+
+    sample = "\n".join(lines[:200])
+
+    # Determine delimiter from filename or by sniffing
+    lower = filename.lower()
+    if lower.endswith(".tsv"):
+        delimiters = "\t"
+    elif lower.endswith(".csv"):
+        delimiters = ","
+    else:
+        delimiters = ",\t|;"
+
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=delimiters)
+    except csv.Error:
+        # No delimiter found — treat as one peptide per line
+        return [ln.strip() for ln in lines]
+
+    has_header = csv.Sniffer().has_header(sample)
+
+    reader = csv.reader(io.StringIO(content), dialect=dialect)
+    rows = list(reader)
+    if not rows:
+        return []
+
+    if has_header:
+        headers = [h.strip() for h in rows[0]]
+        col_idx = next(
+            (i for i, h in enumerate(headers) if h.lower() in _PEPTIDE_COL_NAMES),
+            0,  # fall back to first column
+        )
+        data_rows = rows[1:]
+    else:
+        col_idx = 0
+        data_rows = rows
+
+    return [row[col_idx].strip() for row in data_rows if len(row) > col_idx and row[col_idx].strip()]
+
 
 def _fmt_num(x, decimals: int = 3) -> str:
     try:
@@ -64,6 +148,23 @@ def _render_summary_metrics(df: pd.DataFrame) -> None:
               help="%Rank ≤ 2.0 % or IC50 < 500 nM")
     c3.metric("Non-Binders (NB)", int((df["binding_level"] == "NB").sum()),
               help="%Rank > 2.0 % or IC50 ≥ 500 nM")
+
+
+def _render_binding_score(df: pd.DataFrame, n_length_filtered: int) -> None:
+    """Display the binding fraction (BF) score and its definition box."""
+    score = calculate_binding_score(df, n_length_filtered)
+    if score is None:
+        return
+
+    score_pct = f"{score:.0%}"
+    col, _ = st.columns([1, 3])
+    col.metric(
+        "Binding Score (BF)",
+        score_pct,
+        help="Fraction of length-filtered peptides predicted to bind ≥ 1 allele (SB or WB).",
+    )
+    with st.expander("What is the Binding Score?"):
+        st.markdown(_BINDING_SCORE_HELP)
 
 
 def _render_results_table(
@@ -101,6 +202,52 @@ def _render_results_table(
         column_config=col_cfg,
         key=key,
     )
+
+
+_LEVEL_COLORS = {"SB": "#e74c3c", "WB": "#f39c12", "NB": "#bdc3c7"}
+_LEVEL_ORDER  = ["SB", "WB", "NB"]
+
+
+def _plot_scatter(df: pd.DataFrame, color_col: str, key: str) -> None:
+    """EL %Rank vs log₁₀ IC50 scatter, coloured by binding_level or tool."""
+    import numpy as np
+    plot_df = df.dropna(subset=["rank", "ic50"]).copy()
+    plot_df = plot_df[plot_df["ic50"] > 0]
+    if plot_df.empty:
+        return
+    plot_df["log_ic50"] = np.log10(plot_df["ic50"])
+    color_map = _LEVEL_COLORS if color_col == "binding_level" else None
+    cat_orders = {color_col: _LEVEL_ORDER} if color_col == "binding_level" else {}
+    fig = px.scatter(
+        plot_df,
+        x="rank",
+        y="log_ic50",
+        color=color_col,
+        color_discrete_map=color_map,
+        category_orders=cat_orders,
+        hover_data=["peptide", "allele"],
+        labels={
+            "rank": "EL %Rank",
+            "log_ic50": "log₁₀ IC50 (nM)",
+            "binding_level": "Class",
+            "tool": "Tool",
+        },
+        opacity=0.75,
+    )
+    fig.add_vline(x=0.5, line_dash="dash", line_color="#e74c3c", opacity=0.5,
+                  annotation_text="SB", annotation_position="top right")
+    fig.add_vline(x=2.0, line_dash="dash", line_color="#f39c12", opacity=0.5,
+                  annotation_text="WB", annotation_position="top right")
+    fig.add_hline(y=np.log10(50),  line_dash="dash", line_color="#e74c3c", opacity=0.3)
+    fig.add_hline(y=np.log10(500), line_dash="dash", line_color="#f39c12", opacity=0.3)
+    fig.update_layout(
+        height=380,
+        margin=dict(t=20, b=40, l=50, r=20),
+        plot_bgcolor="white",
+        xaxis=dict(gridcolor="#ececec"),
+        yaxis=dict(gridcolor="#ececec"),
+    )
+    st.plotly_chart(fig, use_container_width=True, key=key)
 
 
 def _download_button(df: pd.DataFrame, filename: str, key: str) -> None:
@@ -198,16 +345,15 @@ if _input_mode == "Paste sequences":
         _raw_sequences = [s.strip() for s in _raw.splitlines() if s.strip()]
 else:
     _upload = st.file_uploader(
-        "Plain-text file — one peptide per line (.txt / .csv)",
-        type=["txt", "csv"],
+        "Plain-text (.txt), CSV, or TSV — one peptide per line, or a table with a peptide column",
+        type=["txt", "csv", "tsv"],
         key="pred_seq_file",
     )
     if _upload is not None:
-        _raw_sequences = [
-            s.strip()
-            for s in _upload.read().decode("utf-8", errors="replace").splitlines()
-            if s.strip()
-        ]
+        _raw_sequences = _parse_peptide_file(
+            _upload.read().decode("utf-8", errors="replace"),
+            _upload.name,
+        )
 
 # Validate sequences
 _sequences: list[str] = []
@@ -351,14 +497,20 @@ if not _all_alleles:
 if not _tools_to_run:
     _can_run = False
 
-# Warn about large jobs
+# Warn about large jobs — estimate based on ~23 s / 1,000 peptides / allele (NetMHCpan benchmark)
 if _can_run:
     _n_pep = len([p for p in _unique_seqs if len(p) in set(_selected_lengths)])
     _n_pairs = _n_pep * len(_all_alleles)
+    _est_secs = (_n_pep / 1_000) * 23 * len(_all_alleles) * len(_tools_to_run)
     if _n_pep > 10_000:
+        _est_str = (
+            f"{_est_secs / 60:.0f} min" if _est_secs >= 90
+            else f"{_est_secs:.0f} s"
+        )
         st.warning(
             f"{_n_pep:,} peptides × {len(_all_alleles)} allele(s) = "
-            f"{_n_pairs:,} predictions.  This may take several minutes."
+            f"{_n_pairs:,} predictions.  "
+            f"Estimated run time: **~{_est_str}** — do not close this tab."
         )
     elif _n_pep > 2_000:
         st.info(
@@ -404,6 +556,7 @@ if _run_clicked and _can_run:
         if not _df.empty:
             st.session_state["pred_single_result"] = _df
             st.session_state["pred_single_tool_used"] = _tools_to_run[0]
+            st.session_state["pred_n_length_filtered"] = len(_peptides_for_run)
         for e in _errs:
             st.warning(e)
 
@@ -440,6 +593,7 @@ if _run_clicked and _can_run:
             )
 
         st.session_state["pred_compare_results"] = _compare_results
+        st.session_state["pred_n_length_filtered"] = len(_peptides_for_run)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Results — Single tool
@@ -453,6 +607,10 @@ if _mode == "Single tool" and "pred_single_result" in st.session_state:
     st.subheader(f"Results — {_tool_used}  ·  {len(_result_df):,} predictions")
 
     _render_summary_metrics(_result_df)
+    _render_binding_score(
+        _result_df,
+        st.session_state.get("pred_n_length_filtered", 0),
+    )
 
     # Per-allele filter
     if "allele" in _result_df.columns and _result_df["allele"].nunique() > 1:
@@ -471,6 +629,8 @@ if _mode == "Single tool" and "pred_single_result" in st.session_state:
         options=["rank", "ic50", "score", "binding_level", "peptide"],
         key="pred_single_sort",
     )
+
+    _plot_scatter(_view_df, color_col="binding_level", key="single_scatter")
 
     _render_results_table(_view_df, sort_by=_sort_col, key="pred_single_table")
 
@@ -515,10 +675,17 @@ elif _mode == "Compare tools" and "pred_compare_results" in st.session_state:
 
         # Summary tab
         with _tabs[0]:
+            _plot_scatter(
+                _merged_df.assign(tool=_merged_df["tool"]),
+                color_col="tool",
+                key="cmp_summary_scatter",
+            )
             st.markdown("#### Per-tool binding-level breakdown")
+            _n_lf = st.session_state.get("pred_n_length_filtered", 0)
             _summary_rows = []
             for _t, _df in _ok_tools.items():
                 _pp = postprocess(_df)
+                _bs = calculate_binding_score(_pp, _n_lf)
                 _summary_rows.append({
                     "Tool": _t,
                     "Version": next(
@@ -528,12 +695,16 @@ elif _mode == "Compare tools" and "pred_compare_results" in st.session_state:
                     "Strong Binders (SB)": int((_pp["binding_level"] == "SB").sum()),
                     "Weak Binders (WB)": int((_pp["binding_level"] == "WB").sum()),
                     "Non-Binders (NB)": int((_pp["binding_level"] == "NB").sum()),
+                    "Binding Score": f"{_bs:.0%}" if _bs is not None else "—",
                 })
             st.dataframe(
                 pd.DataFrame(_summary_rows),
                 use_container_width=True,
                 hide_index=True,
             )
+
+            with st.expander("What is the Binding Score?"):
+                st.markdown(_BINDING_SCORE_HELP)
 
             st.markdown("#### Consensus table (peptide × allele × tool)")
             st.caption(
@@ -567,6 +738,8 @@ elif _mode == "Compare tools" and "pred_compare_results" in st.session_state:
                     st.caption(f"Version: `{_t_cls.version()}`  ·  {_t_cls.description}")
 
                 _render_summary_metrics(_pp_df)
+                _render_binding_score(_pp_df, st.session_state.get("pred_n_length_filtered", 0))
+                _plot_scatter(_pp_df, color_col="binding_level", key=f"cmp_{_t_name}_scatter")
                 _render_results_table(_pp_df, key=f"pred_cmp_table_{_t_name}")
                 _download_button(
                     _pp_df,

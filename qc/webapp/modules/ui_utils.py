@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 
 from modules.auth import hash_password, password_strength_error, verify_password
-from modules.database import create_user, get_user_by_username, username_exists
+from modules.database import create_user, get_user_by_username, update_password, username_exists
 
 _PROTOTYPE_PASSWORD = "helab"
 
@@ -107,3 +107,25 @@ def render_sidebar_auth() -> None:
                     st.session_state["username"] = nu.strip()
                     st.success("Account created.")
                     st.rerun()
+
+        with st.expander("Forgot password"):
+            rp_user = st.text_input("Username", key="_sb_reset_user")
+            rp_new = st.text_input("New password", type="password", key="_sb_reset_new")
+            rp_confirm = st.text_input("Confirm new password", type="password", key="_sb_reset_confirm")
+            if st.button("Reset password", use_container_width=True, key="_sb_reset_btn"):
+                rp_user = rp_user.strip()
+                if not rp_user or not rp_new:
+                    st.error("Username and new password are required.")
+                elif rp_new != rp_confirm:
+                    st.error("Passwords do not match.")
+                else:
+                    err = password_strength_error(rp_new)
+                    if err:
+                        st.error(err)
+                    else:
+                        user = get_user_by_username(rp_user)
+                        if not user:
+                            st.error("Username not found.")
+                        else:
+                            update_password(user["id"], hash_password(rp_new))
+                            st.success("Password updated. You can now log in.")

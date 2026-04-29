@@ -5,7 +5,7 @@ import re
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -77,11 +77,12 @@ from modules.metrics import (
 from modules.prediction import (
     COMMON_ALLELES as PRED_ALLELES,
     SUPPORTED_LENGTHS as PRED_LENGTHS,
+    make_consensus_table,
     postprocess as pred_postprocess,
     predictor_status_table,
     run_prediction,
 )
-from modules.predictors.registry import get_available_predictors
+from modules.predictors.registry import ALL_PREDICTORS, get_available_predictors
 from modules.parsing import detect_delimiter, load_table
 from modules.report import build_csv_summary, build_html_report
 from modules.storage import serialize_run
@@ -530,6 +531,94 @@ def render_mapping() -> None:
 # MHC-I Prediction tab (embedded inside Screen 3)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _mhci_results_table(result_df: pd.DataFrame, key: str) -> None:
+    display_cols = [
+        c for c in ["tool", "allele", "peptide", "score", "rank", "ic50", "binding_level"]
+        if c in result_df.columns
+    ]
+    if not display_cols:
+        st.warning("Unexpected result format.")
+        return
+    col_cfg: dict = {}
+    if "score" in result_df.columns:
+        col_cfg["score"] = st.column_config.NumberColumn("Score", format="%.4f")
+    if "rank" in result_df.columns:
+        col_cfg["rank"] = st.column_config.NumberColumn("%Rank", format="%.2f")
+    if "ic50" in result_df.columns:
+        col_cfg["ic50"] = st.column_config.NumberColumn("IC50 (nM)", format="%.1f")
+    if "binding_level" in result_df.columns:
+        col_cfg["binding_level"] = st.column_config.TextColumn("Class")
+    sort_col: str = next((c for c in ["rank", "score"] if c in display_cols), display_cols[0])
+    display_df = result_df.reindex(columns=display_cols)
+    st.dataframe(
+        display_df.sort_values(by=sort_col, ascending=True, na_position="last"),
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config=col_cfg,
+        key=key,
+    )
+
+
+def _mhci_summary_metrics(result_df: pd.DataFrame) -> None:
+    if "binding_level" not in result_df.columns:
+        return
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Strong Binders (SB)", int((result_df["binding_level"] == "SB").sum()),
+              help="%Rank ≤ 0.5% or IC50 < 50 nM")
+    m2.metric("Weak Binders (WB)", int((result_df["binding_level"] == "WB").sum()),
+              help="%Rank ≤ 2.0% or IC50 < 500 nM")
+    m3.metric("Non-Binders (NB)", int((result_df["binding_level"] == "NB").sum()),
+              help="%Rank > 2.0% or IC50 ≥ 500 nM")
+
+
+_MHCI_LEVEL_COLORS = {"SB": "#e74c3c", "WB": "#f39c12", "NB": "#bdc3c7"}
+_MHCI_LEVEL_ORDER  = ["SB", "WB", "NB"]
+
+
+def _mhci_plot_scatter(df: pd.DataFrame, color_col: str, key: str) -> None:
+    """EL %Rank vs log₁₀ IC50 scatter, coloured by binding_level or tool."""
+    import plotly.express as px
+
+    plot_df = df.dropna(subset=["rank", "ic50"]).copy()
+    plot_df = plot_df[plot_df["ic50"] > 0]
+    if plot_df.empty:
+        return
+    plot_df["log_ic50"] = np.log10(plot_df["ic50"])
+    color_map = _MHCI_LEVEL_COLORS if color_col == "binding_level" else None
+    cat_orders = {color_col: _MHCI_LEVEL_ORDER} if color_col == "binding_level" else {}
+    fig = px.scatter(
+        plot_df,
+        x="rank",
+        y="log_ic50",
+        color=color_col,
+        color_discrete_map=color_map,
+        category_orders=cat_orders,
+        hover_data=["peptide", "allele"],
+        labels={
+            "rank": "EL %Rank",
+            "log_ic50": "log₁₀ IC50 (nM)",
+            "binding_level": "Class",
+            "tool": "Tool",
+        },
+        opacity=0.75,
+    )
+    fig.add_vline(x=0.5, line_dash="dash", line_color="#e74c3c", opacity=0.5,
+                  annotation_text="SB", annotation_position="top right")
+    fig.add_vline(x=2.0, line_dash="dash", line_color="#f39c12", opacity=0.5,
+                  annotation_text="WB", annotation_position="top right")
+    fig.add_hline(y=np.log10(50),  line_dash="dash", line_color="#e74c3c", opacity=0.3)
+    fig.add_hline(y=np.log10(500), line_dash="dash", line_color="#f39c12", opacity=0.3)
+    fig.update_layout(
+        height=380,
+        margin=dict(t=20, b=40, l=50, r=20),
+        plot_bgcolor="white",
+        xaxis=dict(gridcolor="#ececec"),
+        yaxis=dict(gridcolor="#ececec"),
+    )
+    st.plotly_chart(fig, use_container_width=True, key=key)
+
+
 def _render_mhci_tab(df: pd.DataFrame) -> None:
     """MHC-I binding/presentation prediction using locally-installed open-source tools."""
     st.markdown(
@@ -544,7 +633,7 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
     with st.expander("Predictor availability"):
         status_rows = predictor_status_table()
         st.dataframe(
-            pd.DataFrame(status_rows)[["Tool", "Available", "Description"]],
+            pd.DataFrame(status_rows)[["Tool", "Status", "Description"]],
             use_container_width=True,
             hide_index=True,
         )
@@ -558,9 +647,16 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
         )
         return
 
-    # ── Configuration widgets ─────────────────────────────────────────────────
+    # ── Mode selection ────────────────────────────────────────────────────────
+    mode = st.radio(
+        "Mode",
+        ["Single tool", "Compare tools"],
+        horizontal=True,
+        key="mhci_cfg_mode",
+    )
+
+    # ── Allele + length config ────────────────────────────────────────────────
     for _cfg_key, _cfg_default in [
-        ("mhci_cfg_tool", available_names[0]),
         ("mhci_cfg_alleles", ["HLA-A*02:01"]),
         ("mhci_cfg_lengths", [9]),
         ("mhci_cfg_custom", ""),
@@ -568,32 +664,17 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
         if _cfg_key not in st.session_state:
             st.session_state[_cfg_key] = _cfg_default
 
-    _it, _ia, _il = st.columns([2, 3, 2])
-    with _it:
-        st.selectbox(
-            "Prediction tool",
-            options=available_names,
-            key="mhci_cfg_tool",
-        )
+    _ia, _il = st.columns([3, 2])
     with _ia:
-        st.multiselect(
-            "HLA Alleles",
-            options=PRED_ALLELES,
-            key="mhci_cfg_alleles",
-        )
+        st.multiselect("HLA Alleles", options=PRED_ALLELES, key="mhci_cfg_alleles")
         st.text_input(
             "Custom allele (comma-separated)",
             key="mhci_cfg_custom",
             placeholder="HLA-A*68:01",
         )
     with _il:
-        st.multiselect(
-            "Peptide Lengths (mer)",
-            options=PRED_LENGTHS,
-            key="mhci_cfg_lengths",
-        )
+        st.multiselect("Peptide Lengths (mer)", options=PRED_LENGTHS, key="mhci_cfg_lengths")
 
-    sel_tool: str = st.session_state.get("mhci_cfg_tool", available_names[0])
     sel_alleles: list[str] = list(st.session_state.get("mhci_cfg_alleles", []))
     custom_raw: str = st.session_state.get("mhci_cfg_custom", "").strip()
     if custom_raw:
@@ -604,6 +685,29 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
                 sel_alleles.append(a)
                 seen.add(a)
     sel_lengths: list[int] = list(st.session_state.get("mhci_cfg_lengths", []))
+
+    # ── Tool selection ────────────────────────────────────────────────────────
+    tools_to_run: list[str] = []
+    if mode == "Single tool":
+        if "mhci_cfg_tool" not in st.session_state:
+            st.session_state["mhci_cfg_tool"] = available_names[0]
+        st.selectbox("Prediction tool", options=available_names, key="mhci_cfg_tool")
+        sel_tool = st.session_state.get("mhci_cfg_tool", available_names[0])
+        sel_cls = next(cls for cls in available if cls.name == sel_tool)
+        st.caption(f"{sel_cls.description}  \nVersion: `{sel_cls.version()}`")
+        tools_to_run = [sel_tool]
+    else:
+        compare_choices = {
+            cls.name: st.checkbox(
+                f"**{cls.name}** — {cls.description}",
+                value=True,
+                key=f"mhci_cfg_compare_{cls.name}",
+            )
+            for cls in available
+        }
+        tools_to_run = [name for name, checked in compare_choices.items() if checked]
+        if not tools_to_run:
+            st.warning("Select at least one tool to run.")
 
     if not sel_alleles or not sel_lengths:
         st.warning("Select at least one HLA allele and one peptide length to run predictions.")
@@ -626,21 +730,29 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
             "this may take several minutes depending on the tool and your hardware."
         )
 
+    if not tools_to_run:
+        return
+
     # ── Run button ────────────────────────────────────────────────────────────
-    if st.button("Run Prediction", type="primary", key="mhci_tab_run"):
+    run_label = (
+        f"Run {tools_to_run[0]}" if len(tools_to_run) == 1
+        else f"Compare {len(tools_to_run)} tools"
+    )
+    if st.button(run_label, type="primary", key="mhci_tab_run",
+                 disabled=not matching_peptides):
         if not matching_peptides:
             st.error(
                 "No peptides in the dataset match the selected lengths. "
                 "Adjust the Peptide Lengths above."
             )
-        else:
+        elif mode == "Single tool":
             with st.status(
-                f"Running {sel_tool} on {len(matching_peptides):,} peptide(s) × "
-                f"{len(sel_alleles)} allele(s)…",
+                f"Running {tools_to_run[0]} — "
+                f"{len(matching_peptides):,} peptide(s) × {len(sel_alleles)} allele(s)…",
                 expanded=True,
             ) as status:
                 result_df, errors = run_prediction(
-                    matching_peptides, sel_alleles, sel_lengths, sel_tool
+                    matching_peptides, sel_alleles, sel_lengths, tools_to_run[0]
                 )
                 if errors:
                     for err in errors:
@@ -652,59 +764,163 @@ def _render_mhci_tab(df: pd.DataFrame) -> None:
                 else:
                     st.write(f":white_check_mark: {len(result_df):,} predictions complete.")
                     status.update(label="Done", state="complete", expanded=False)
-
             if not result_df.empty:
-                st.session_state["mhci_tab_results"] = result_df
+                st.session_state["mhci_tab_single_result"] = result_df
+                st.session_state["mhci_tab_single_tool"] = tools_to_run[0]
             for err in errors:
                 st.warning(err)
+        else:  # compare
+            compare_results: dict[str, tuple[pd.DataFrame, list[str]]] = {}
+            with st.status(
+                f"Running {len(tools_to_run)} tool(s)…", expanded=True
+            ) as status:
+                for i, tool in enumerate(tools_to_run):
+                    st.write(
+                        f"**{tool}** ({i + 1}/{len(tools_to_run)})  "
+                        f"{len(matching_peptides):,} peptide(s) × {len(sel_alleles)} allele(s)"
+                    )
+                    df_t, errs_t = run_prediction(
+                        matching_peptides, sel_alleles, sel_lengths, tool
+                    )
+                    compare_results[tool] = (df_t, errs_t)
+                    if errs_t:
+                        for e in errs_t:
+                            st.write(f"  :x: {e}")
+                    elif df_t.empty:
+                        st.write(f"  :warning: No results from {tool}.")
+                    else:
+                        st.write(f"  :white_check_mark: {len(df_t):,} predictions.")
+                any_ok = any(not d.empty for d, _ in compare_results.values())
+                status.update(
+                    label="Done" if any_ok else "All tools failed",
+                    state="complete" if any_ok else "error",
+                    expanded=not any_ok,
+                )
+            st.session_state["mhci_tab_compare_results"] = compare_results
 
-    # ── Results ───────────────────────────────────────────────────────────────
-    if "mhci_tab_results" in st.session_state:
-        result_df = pred_postprocess(st.session_state["mhci_tab_results"])
+    # ── Results — Single tool ─────────────────────────────────────────────────
+    if mode == "Single tool" and "mhci_tab_single_result" in st.session_state:
+        result_df = pred_postprocess(st.session_state["mhci_tab_single_result"])
+        tool_used = st.session_state.get("mhci_tab_single_tool", "")
 
-        display_cols = [
-            c for c in ["tool", "allele", "peptide", "score", "rank", "ic50", "binding_level"]
-            if c in result_df.columns
-        ]
+        st.subheader(f"Results — {tool_used}  ·  {len(result_df):,} predictions")
+        _mhci_summary_metrics(result_df)
 
-        if not display_cols:
-            st.warning("Unexpected result format.")
-            st.code(str(result_df.columns.tolist()))
+        if "allele" in result_df.columns and result_df["allele"].nunique() > 1:
+            allele_filter = st.multiselect(
+                "Filter by allele",
+                options=sorted(result_df["allele"].unique()),
+                default=sorted(result_df["allele"].unique()),
+                key="mhci_tab_single_allele_filter",
+            )
+            view_df = cast(pd.DataFrame, result_df[result_df["allele"].isin(allele_filter)])
         else:
-            st.subheader(f"Results — {len(result_df):,} predictions")
+            view_df = result_df
 
-            if "binding_level" in result_df.columns:
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Strong Binders (SB)", int((result_df["binding_level"] == "SB").sum()))
-                m2.metric("Weak Binders (WB)", int((result_df["binding_level"] == "WB").sum()))
-                m3.metric("Non-Binders (NB)", int((result_df["binding_level"] == "NB").sum()))
+        _mhci_plot_scatter(view_df, color_col="binding_level", key="mhci_tab_single_scatter")
+        _mhci_results_table(view_df, key="mhci_tab_single_table")
+        with st.expander("Binding level reference"):
+            st.caption(
+                "**SB** Strong Binder: %Rank ≤ 0.5% or IC50 < 50 nM  \n"
+                "**WB** Weak Binder: %Rank ≤ 2.0% or IC50 < 500 nM  \n"
+                "**NB** Non-Binder: %Rank > 2.0% or IC50 ≥ 500 nM"
+            )
+        st.download_button(
+            "⬇ Download CSV",
+            data=result_df.to_csv(index=False).encode("utf-8"),
+            file_name=f"mhci_{tool_used.lower()}_predictions.csv",
+            mime="text/csv",
+            key="mhci_tab_single_dl",
+        )
 
-            display_df = result_df[display_cols].copy()
-            for num_col in ("score", "rank", "ic50"):
-                if num_col in display_df.columns:
-                    display_df[num_col] = display_df[num_col].apply(
-                        lambda x: f"{float(x):.4f}" if pd.notna(x) and str(x) != "nan" else "—"
+    # ── Results — Compare tools ───────────────────────────────────────────────
+    elif mode == "Compare tools" and "mhci_tab_compare_results" in st.session_state:
+        cmp = st.session_state["mhci_tab_compare_results"]
+        ok_tools = {name: d for name, (d, _) in cmp.items() if not d.empty}
+        failed_tools = {name: errs for name, (d, errs) in cmp.items() if d.empty or errs}
+
+        st.subheader(f"Results — {len(ok_tools)} tool(s) completed")
+
+        for name, errs in failed_tools.items():
+            for e in errs:
+                st.warning(f"**{name}:** {e}")
+
+        if not ok_tools:
+            st.error("All selected tools failed.")
+        else:
+            all_frames = [pred_postprocess(d) for d in ok_tools.values()]
+            merged_df = pd.concat(all_frames, ignore_index=True)
+
+            tab_names = ["Summary"] + list(ok_tools.keys())
+            tabs = st.tabs(tab_names)
+
+            with tabs[0]:
+                _mhci_plot_scatter(merged_df, color_col="tool", key="mhci_tab_cmp_summary_scatter")
+                st.markdown("#### Per-tool binding-level breakdown")
+                summary_rows = []
+                for t, d in ok_tools.items():
+                    pp = pred_postprocess(d)
+                    summary_rows.append({
+                        "Tool": t,
+                        "Version": next(
+                            (cls.version() for cls in ALL_PREDICTORS if cls.name == t), "—"
+                        ),
+                        "Predictions": len(pp),
+                        "Strong Binders (SB)": int((pp["binding_level"] == "SB").sum()),
+                        "Weak Binders (WB)": int((pp["binding_level"] == "WB").sum()),
+                        "Non-Binders (NB)": int((pp["binding_level"] == "NB").sum()),
+                    })
+                st.dataframe(
+                    pd.DataFrame(summary_rows), use_container_width=True, hide_index=True
+                )
+
+                st.markdown("#### Consensus table (peptide × allele × tool)")
+                st.caption(
+                    "Each cell shows the binding class assigned by that tool. "
+                    "Empty cells mean the tool did not return a result for that pair."
+                )
+                consensus = make_consensus_table(
+                    {n: pred_postprocess(d) for n, d in ok_tools.items()}
+                )
+                if not consensus.empty:
+                    st.dataframe(
+                        consensus, use_container_width=True, hide_index=True,
+                        height=350, key="mhci_tab_consensus",
+                    )
+                else:
+                    st.info("Not enough data to build a consensus table.")
+
+                st.download_button(
+                    "⬇ Download all results CSV",
+                    data=merged_df.to_csv(index=False).encode("utf-8"),
+                    file_name="mhci_comparison_all_tools.csv",
+                    mime="text/csv",
+                    key="mhci_tab_cmp_dl_all",
+                )
+
+            for tab, (t_name, t_df) in zip(tabs[1:], ok_tools.items()):
+                with tab:
+                    pp_df = pred_postprocess(t_df)
+                    t_cls = next((cls for cls in ALL_PREDICTORS if cls.name == t_name), None)
+                    if t_cls:
+                        st.caption(f"Version: `{t_cls.version()}`  ·  {t_cls.description}")
+                    _mhci_summary_metrics(pp_df)
+                    _mhci_plot_scatter(pp_df, color_col="binding_level", key=f"mhci_tab_cmp_scatter_{t_name}")
+                    _mhci_results_table(pp_df, key=f"mhci_tab_cmp_table_{t_name}")
+                    st.download_button(
+                        "⬇ Download CSV",
+                        data=pp_df.to_csv(index=False).encode("utf-8"),
+                        file_name=f"mhci_{t_name.lower()}_predictions.csv",
+                        mime="text/csv",
+                        key=f"mhci_tab_cmp_dl_{t_name}",
                     )
 
-            sort_col = next(
-                (c for c in ["rank", "score"] if c in display_df.columns), display_df.columns[0]
-            )
-            st.dataframe(
-                display_df.sort_values(sort_col, ascending=True, na_position="last"),
-                use_container_width=True,
-                height=420,
-            )
-            st.caption(
-                "**Binding level thresholds:** SB = Strong Binder (EL %rank ≤ 0.5% or IC50 < 50 nM), "
-                "WB = Weak Binder (EL %rank ≤ 2% or IC50 < 500 nM), NB = Non-Binder."
-            )
-            st.download_button(
-                "Download Results CSV",
-                data=result_df[display_cols].to_csv(index=False).encode("utf-8"),
-                file_name="mhci_analysis_predictions.csv",
-                mime="text/csv",
-                key="mhci_tab_download",
-            )
+            with st.expander("Binding level reference"):
+                st.caption(
+                    "**SB** Strong Binder: %Rank ≤ 0.5% or IC50 < 50 nM  \n"
+                    "**WB** Weak Binder: %Rank ≤ 2.0% or IC50 < 500 nM  \n"
+                    "**NB** Non-Binder: %Rank > 2.0% or IC50 ≥ 500 nM"
+                )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # SCREEN 3 — QC Report

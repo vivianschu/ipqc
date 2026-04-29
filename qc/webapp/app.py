@@ -69,11 +69,12 @@ with st.sidebar:
 pg = st.navigation([
     st.Page("pages/2_About.py",           title="About",           icon=":material/info:"),
     st.Page("pages/3_Glossary.py",        title="Glossary",        icon=":material/menu_book:"),
-    st.Page("pages/analysis.py",          title="Analysis",        icon=":material/science:"),
     st.Page("pages/4_My_Runs.py",         title="My Runs",         icon=":material/folder_open:"),
     st.Page("pages/5_Compare_Runs.py",    title="Compare Runs",    icon=":material/compare_arrows:"),
-    st.Page("pages/6_MHC_Prediction.py",  title="MHC-I Prediction", icon=":material/biotech:"),
-    st.Page("pages/7_Diagnostics.py",     title="Diagnostics",      icon=":material/monitor_heart:"),
+    st.Page("pages/analysis.py",          title="MS Analysis",     icon=":material/science:"),
+    st.Page("pages/8_HLA_Typing.py",      title="HLA Typing",      icon=":material/genetics:"),
+    st.Page("pages/6_MHC_Prediction.py",  title="MHC Prediction",  icon=":material/biotech:"),
+    st.Page("pages/7_Diagnostics.py",     title="Diagnostics",     icon=":material/monitor_heart:"),
 ])
 
 # ── Sidebar: auth block + footer (appears below navigation links) ─────────────

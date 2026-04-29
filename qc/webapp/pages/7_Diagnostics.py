@@ -15,12 +15,13 @@ from pathlib import Path
 import streamlit as st
 
 from modules.predictors.registry import ALL_PREDICTORS
+from modules.predictors.netmhcpan_predictor import _BINARY as _NETMHCPAN_BINARY, _BUNDLED_BINARY as _NETMHCPAN_BUNDLED
 
 st.set_page_config(page_title="Diagnostics — IPQC", layout="wide")
 st.title("Server Diagnostics")
 st.caption(
     "Read-only view of the server environment. "
-    "No secrets, credentials, or user data are shown here."
+    "No credentials or user data are shown here."
 )
 
 # ── 1. Runtime versions ───────────────────────────────────────────────────────
@@ -75,7 +76,7 @@ for cls in ALL_PREDICTORS:
 
     rows.append({
         "Tool": cls.name,
-        "Available": "✅ yes" if available else "❌ no",
+        "Available": "✅ Yes" if available else "❌ No",
         "Version": version,
         "Env vars": env_status,
     })
@@ -100,7 +101,6 @@ st.subheader("Environment Variables")
 
 _WATCHED_VARS = [
     "MHCFLURRY_DATA_PATH",
-    "NETMHCPAN_PATH",
     "PATH",
 ]
 
@@ -111,6 +111,13 @@ for var in _WATCHED_VARS:
         val = val[:120] + "…" if len(val) > 120 else val
     env_rows.append({"Variable": var, "Value": val or "(unset)"})
 
+# Show the resolved NetMHCpan binary path (bundled or PATH)
+_bundled_exists = _NETMHCPAN_BUNDLED.is_file()
+env_rows.append({
+    "Variable": "netMHCpan binary (resolved)",
+    "Value": f"{_NETMHCPAN_BINARY}  {'✅ exists' if Path(_NETMHCPAN_BINARY).exists() else '❌ not found'}",
+})
+
 st.dataframe(pd.DataFrame(env_rows), use_container_width=True, hide_index=True)
 
 # ── 5. Disk space ─────────────────────────────────────────────────────────────
@@ -120,6 +127,7 @@ st.subheader("Disk Space")
 _CHECK_PATHS: list[tuple[str, str]] = [
     ("App data (runs + DB)", str(Path(__file__).parent.parent / "data")),
     ("MHCflurry models", os.environ.get("MHCFLURRY_DATA_PATH", str(Path.home() / ".local/share/mhcflurry"))),
+    ("NetMHCpan install", str(_NETMHCPAN_BUNDLED.parent)),
     ("/tmp", "/tmp"),
 ]
 
@@ -157,7 +165,7 @@ st.dataframe(pd.DataFrame(disk_rows), use_container_width=True, hide_index=True)
 st.subheader("CLI Checks")
 
 _CLI_CHECKS: list[tuple[str, list[str]]] = [
-    ("netMHCpan on PATH", ["netMHCpan", "-h"]),
+    ("netMHCpan", [_NETMHCPAN_BINARY, "-h"]),
     ("git", ["git", "--version"]),
 ]
 
@@ -167,12 +175,12 @@ for label, cmd in _CLI_CHECKS:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         first_line = (r.stdout + r.stderr).strip().splitlines()[0] if (r.stdout + r.stderr).strip() else "(no output)"
         ok = r.returncode == 0
-        cli_rows.append({"Check": label, "Result": "✅ found" if ok else "❌ failed", "Output": first_line})
+        cli_rows.append({"Check": label, "Result": "✅ Found" if ok else "❌ Failed", "Output": first_line})
     except FileNotFoundError:
-        cli_rows.append({"Check": label, "Result": "❌ not found", "Output": f"{cmd[0]!r} not on PATH"})
+        cli_rows.append({"Check": label, "Result": "❌ Not Found", "Output": f"{cmd[0]!r} not on PATH"})
     except subprocess.TimeoutExpired:
-        cli_rows.append({"Check": label, "Result": "⚠️ timeout", "Output": "did not respond in 10 s"})
+        cli_rows.append({"Check": label, "Result": "⚠️ Timeout", "Output": "did not respond in 10 s"})
     except Exception as e:
-        cli_rows.append({"Check": label, "Result": "⚠️ error", "Output": str(e)})
+        cli_rows.append({"Check": label, "Result": "⚠️ Error", "Output": str(e)})
 
 st.dataframe(pd.DataFrame(cli_rows), use_container_width=True, hide_index=True)

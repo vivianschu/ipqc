@@ -82,6 +82,14 @@ def username_exists(username: str) -> bool:
     return get_user_by_username(username) is not None
 
 
+def update_password(user_id: int, new_password_hash: str) -> None:
+    with _conn() as con:
+        con.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (new_password_hash, user_id),
+        )
+
+
 # ── Run CRUD ──────────────────────────────────────────────────────────────────
 
 def save_run(

@@ -166,6 +166,33 @@ def postprocess(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ── Binding score ─────────────────────────────────────────────────────────────
+
+def calculate_binding_score(df: pd.DataFrame, n_length_filtered: int) -> float | None:
+    """Compute the binding fraction (BF) score.
+
+    For each unique peptide in *df*, find the best binding level across all
+    alleles (SB > WB > NB).  The score is the fraction of *n_length_filtered*
+    peptides that are SB or WB for at least one allele.
+
+    Returns None when *df* is empty or *n_length_filtered* is zero.
+    """
+    if df.empty or n_length_filtered == 0 or "binding_level" not in df.columns:
+        return None
+
+    def _best_level(levels: pd.Series) -> str:
+        vals = set(levels)
+        if "SB" in vals:
+            return "SB"
+        if "WB" in vals:
+            return "WB"
+        return "NB"
+
+    peptide_best = df.groupby("peptide")["binding_level"].apply(_best_level)
+    n_binders = int((peptide_best != "NB").sum())
+    return round(n_binders / n_length_filtered, 2)
+
+
 # ── Utility ───────────────────────────────────────────────────────────────────
 
 def predictor_status_table() -> list[dict]:
