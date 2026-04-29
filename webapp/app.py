@@ -1,4 +1,4 @@
-"""Immunopeptidomics QC Webapp — navigation shell.
+"""Immunopeptidomics Platform — navigation shell.
 
 Handles page config, session-state initialisation, prototype gate, sidebar
 layout, and page routing via st.navigation. All analysis logic lives in the
@@ -19,7 +19,7 @@ from modules.ui_utils import check_prototype_gate, inject_sidebar_css, render_si
 # ── Page config ───────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Immunopeptidomics QC",
+    page_title="Immunopeptidomics Platform",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -58,7 +58,7 @@ with st.sidebar:
         """
         <div style="padding: 0.5rem 0 0.75rem 0;">
             <div style="font-size: 1.4rem; font-weight: 700; line-height: 1.2;">IPQC</div>
-            <div style="font-size: 0.85rem; color: #888; margin-top: 2px;">Immunopeptidomics QC</div>
+            <div style="font-size: 0.85rem; color: #888; margin-top: 2px;">Immunopeptidomics Platform</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -74,7 +74,8 @@ pg = st.navigation([
     st.Page("pages/analysis.py",          title="MS Analysis",     icon=":material/science:"),
     st.Page("pages/8_HLA_Typing.py",      title="HLA Typing",      icon=":material/genetics:"),
     st.Page("pages/6_MHC_Prediction.py",  title="MHC Prediction",  icon=":material/biotech:"),
-    st.Page("pages/7_Diagnostics.py",     title="Diagnostics",     icon=":material/monitor_heart:"),
+    st.Page("pages/7_MHC_Stability.py",   title="MHC Stability",   icon=":material/thermostat:"),
+    st.Page("pages/9_Diagnostics.py",     title="Diagnostics",     icon=":material/monitor_heart:"),
 ])
 
 # ── Sidebar: auth block + footer (appears below navigation links) ─────────────

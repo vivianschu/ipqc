@@ -16,6 +16,7 @@ import streamlit as st
 
 from modules.predictors.registry import ALL_PREDICTORS
 from modules.predictors.netmhcpan_predictor import _BINARY as _NETMHCPAN_BINARY, _BUNDLED_BINARY as _NETMHCPAN_BUNDLED
+from modules.predictors.netmhcstabpan_predictor import _WRAPPER as _NETMHCSTABPAN_WRAPPER, _BINARY as _NETMHCSTABPAN_BINARY
 
 st.set_page_config(page_title="Diagnostics — IPQC", layout="wide")
 st.title("Server Diagnostics")
@@ -117,6 +118,15 @@ env_rows.append({
     "Variable": "netMHCpan binary (resolved)",
     "Value": f"{_NETMHCPAN_BINARY}  {'✅ exists' if Path(_NETMHCPAN_BINARY).exists() else '❌ not found'}",
 })
+env_rows.append({
+    "Variable": "netMHCstabpan wrapper (resolved)",
+    "Value": f"{_NETMHCSTABPAN_WRAPPER}  {'✅ exists' if _NETMHCSTABPAN_WRAPPER.is_file() else '❌ not found'}",
+})
+_stab_binary_path = str(_NETMHCSTABPAN_BINARY) if _NETMHCSTABPAN_BINARY is not None else "(not found)"
+env_rows.append({
+    "Variable": "netMHCstabpan platform binary",
+    "Value": f"{_stab_binary_path}  {'✅ exists' if _NETMHCSTABPAN_BINARY is not None else '❌ not found'}",
+})
 
 st.dataframe(pd.DataFrame(env_rows), use_container_width=True, hide_index=True)
 
@@ -128,6 +138,7 @@ _CHECK_PATHS: list[tuple[str, str]] = [
     ("App data (runs + DB)", str(Path(__file__).parent.parent / "data")),
     ("MHCflurry models", os.environ.get("MHCFLURRY_DATA_PATH", str(Path.home() / ".local/share/mhcflurry"))),
     ("NetMHCpan install", str(_NETMHCPAN_BUNDLED.parent)),
+    ("NetMHCstabpan install", str(_NETMHCSTABPAN_WRAPPER.parent)),
     ("/tmp", "/tmp"),
 ]
 
@@ -166,6 +177,7 @@ st.subheader("CLI Checks")
 
 _CLI_CHECKS: list[tuple[str, list[str]]] = [
     ("netMHCpan", [_NETMHCPAN_BINARY, "-h"]),
+    ("netMHCstabpan", [str(_NETMHCSTABPAN_WRAPPER), "-h"]),
     ("git", ["git", "--version"]),
 ]
 

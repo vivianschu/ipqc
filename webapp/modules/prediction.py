@@ -159,7 +159,7 @@ def postprocess(df: pd.DataFrame) -> pd.DataFrame:
             for _, row in df.iterrows()
         ]
 
-    for col in ["score", "rank", "ic50"]:
+    for col in ["score", "rank", "ic50", "thalf"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 

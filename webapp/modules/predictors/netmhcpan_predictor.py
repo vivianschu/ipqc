@@ -25,6 +25,26 @@ _BINARY: str = str(_BUNDLED_BINARY) if _BUNDLED_BINARY.is_file() else "netMHCpan
 _MODEL_INFO = "NetMHCpan 4.2c"
 
 
+def _configure_wrapper() -> None:
+    """Patch NMHOME in the netMHCpan tcsh wrapper to the actual install directory.
+
+    The wrapper may contain a stale absolute path if the app was moved.  We
+    rewrite NMHOME to the directory resolved at runtime from __file__, so the
+    bundled binary always finds its data files regardless of where the repo lives.
+    """
+    if not _BUNDLED_BINARY.is_file():
+        return
+    wrapper = _BUNDLED_BINARY  # the wrapper IS the "netMHCpan" script
+    try:
+        content = wrapper.read_text()
+        tool_dir = str(_BUNDLED_BINARY.parent)
+        patched = re.sub(r"(setenv\s+NMHOME\s+)\S+", rf"\g<1>{tool_dir}", content)
+        if patched != content:
+            wrapper.write_text(patched)
+    except Exception:
+        pass
+
+
 def _netmhcpan_version() -> str:
     version_file = _BUNDLED_BINARY.parent.parent / "data" / "version"
     try:
@@ -128,6 +148,8 @@ class NetMHCpanPredictor(BaseMHCIPredictor):
         )
         if not binary_exists:
             return False
+        # Ensure NMHOME points to the current install location.
+        _configure_wrapper()
         # Probe to confirm the wrapper script actually runs (checks platform binaries).
         try:
             r = subprocess.run(

@@ -72,6 +72,7 @@ class BaseMHCIPredictor(ABC):
     name: str = "Base"
     description: str = ""
     install_hint: str = ""
+    predictor_type: str = "binding"  # "binding" or "stability"
 
     @classmethod
     @abstractmethod

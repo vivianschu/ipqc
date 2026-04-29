@@ -81,7 +81,7 @@ the Upload → Map → Report workflow behaviour.
 
 ### Summary
 
-Major feature expansion of the Immunopeptidomics QC Webapp. All changes preserve
+Major feature expansion of the Immunopeptidomics Platform. All changes preserve
 the existing Upload → Map → Report workflow and are backward-compatible with existing
 data files.
 
@@ -188,17 +188,17 @@ The SQLite database is created automatically on first startup. No manual
 migration is needed.
 
 ```
-cd qc/webapp
+cd webapp
 uv sync
 streamlit run app.py
 ```
 
 **Run data storage**
 
-Saved runs are written to `qc/webapp/data/runs/<user_id>/<run_id>/`. This
+Saved runs are written to `webapp/data/runs/<user_id>/<run_id>/`. This
 directory is created automatically. To back up or migrate run data, copy the
 entire `data/` directory.
 
 **Database location**
 
-`qc/webapp/data/qc.db` — SQLite file, created on first startup.
+`webapp/data/qc.db` — SQLite file, created on first startup.

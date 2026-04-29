@@ -201,11 +201,11 @@ def _filter_pca_data(pca_data: dict[str, Any], selected_names: list[str]) -> dic
 # ══════════════════════════════════════════════════════════════════════════════
 
 def render_upload() -> None:
-    st.header("Step 1: Upload FragPipe Peptide Table")
+    st.header("Step 1: Upload Peptide Table")
 
     with st.expander("What file to upload", expanded=False):
         st.markdown(
-            "Upload the **combined_peptide.tsv** (or equivalent) exported by FragPipe. "
+            "Upload the **combined_peptide.tsv** (or equivalent). "
             "The file must contain:\n"
             "- One row per unique peptide\n"
             "- Per-sample columns such as `<sample> Match Type`, "
@@ -214,7 +214,7 @@ def render_upload() -> None:
         )
 
     uploaded = st.file_uploader(
-        "FragPipe peptide table (.tsv / .csv / .txt)",
+        "Peptide Table (.tsv / .csv / .txt)",
         type=["tsv", "csv", "txt"],
         key="uploader_main",
     )
@@ -358,7 +358,7 @@ def render_mapping() -> None:
         st.subheader("Sample Mapping")
 
         st.markdown(
-            "Define each sample and map it to its FragPipe columns. "
+            "Define each sample and map it to its columns. "
             "**Match Type** is required; Spectral Count and Intensity are optional."
         )
 
@@ -1343,7 +1343,7 @@ def render_report() -> None:
         st.download_button(
             "Download HTML Report",
             data=html_bytes,
-            file_name=f"immunopeptidomics_qc_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            file_name=f"ipqc_msanalysis_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
             mime="text/html",
         )
 

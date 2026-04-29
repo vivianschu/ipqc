@@ -26,7 +26,7 @@ from modules.prediction import (
     validate_allele_format,
     validate_peptides,
 )
-from modules.predictors.registry import ALL_PREDICTORS, get_available_predictors
+from modules.predictors.registry import ALL_PREDICTORS, get_available_predictors, get_predictors_by_type
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -175,8 +175,8 @@ def _render_results_table(
 ) -> None:
     """Render the results dataframe with formatted numeric columns."""
     display_cols = [
-        c for c in ["tool", "allele", "peptide", "score", "rank", "ic50",
-                    "binding_level", "model_info"]
+        c for c in ["tool", "allele", "peptide", "score", "rank", "thalf",
+                    "ic50", "binding_level", "model_info"]
         if c in df.columns
     ]
     display_df = df[display_cols].copy()
@@ -186,6 +186,8 @@ def _render_results_table(
         col_cfg["score"] = st.column_config.NumberColumn("Score", format="%.4f")
     if "rank" in display_df.columns:
         col_cfg["rank"] = st.column_config.NumberColumn("%Rank", format="%.2f")
+    if "thalf" in display_df.columns:
+        col_cfg["thalf"] = st.column_config.NumberColumn("t½ (h)", format="%.2f")
     if "ic50" in display_df.columns:
         col_cfg["ic50"] = st.column_config.NumberColumn("IC50 (nM)", format="%.1f")
     if "binding_level" in display_df.columns:
@@ -273,15 +275,16 @@ st.markdown(
 
 # ── Tool status ───────────────────────────────────────────────────────────────
 
-available = get_available_predictors()
+available = get_predictors_by_type("binding")
 available_names = [cls.name for cls in available]
-_status_rows = predictor_status_table()
+_status_rows = [r for r in predictor_status_table() if r["Tool"] != "NetMHCstabpan"]
 
 _all_unavailable = not available
 _status_expanded = _all_unavailable  # force open when nothing is installed
 
+_binding_predictors_all = [c for c in ALL_PREDICTORS if c.predictor_type == "binding"]
 with st.expander(
-    f"Tool status — {len(available)}/{len(ALL_PREDICTORS)} available",
+    f"Tool status — {len(available)}/{len(_binding_predictors_all)} available",
     expanded=_status_expanded,
 ):
     status_df = pd.DataFrame(_status_rows)
